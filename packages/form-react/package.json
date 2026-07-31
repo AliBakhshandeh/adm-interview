@@ -1,0 +1,21 @@
+{
+  "name": "@admiral/form-react",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm --external react",
+    "typecheck": "tsup src/index.tsx --format esm --external react",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src --max-warnings=0"
+  },
+  "dependencies": {
+    "@admiral/form-core": "workspace:*",
+    "@admiral/form-schema": "workspace:*",
+    "@admiral/form-ui": "workspace:*",
+    "@admiral/form-validation": "workspace:*"
+  },
+  "peerDependencies": { "react": "^18.3.0" }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@admiral/form-ui",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsup src/index.tsx --format esm --dts --external react",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src --max-warnings=0"
+  },
+  "dependencies": { "clsx": "^2.1.1", "lucide-react": "^0.468.0" },
+  "peerDependencies": { "react": "^18.3.0" }
+}

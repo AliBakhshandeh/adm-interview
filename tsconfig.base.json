@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@admiral/form-platform": ["packages/form-platform/src/index.ts"],
+      "@admiral/form-core": ["packages/form-core/src/index.ts"],
+      "@admiral/form-schema": ["packages/form-schema/src/index.ts"],
+      "@admiral/form-rules": ["packages/form-rules/src/index.ts"],
+      "@admiral/form-validation": ["packages/form-validation/src/index.ts"],
+      "@admiral/form-react": ["packages/form-react/src/index.ts"],
+      "@admiral/form-ui": ["packages/form-ui/src/index.ts"],
+      "@admiral/form-testing": ["packages/form-testing/src/index.ts"],
+      "@admiral/telemetry": ["packages/telemetry/src/index.ts"]
+    }
+  }
+}

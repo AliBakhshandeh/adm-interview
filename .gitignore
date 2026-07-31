@@ -1,0 +1,91 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+build/
+lib/
+out/
+apps/*/dist/
+apps/*/build/
+apps/*/storybook-static/
+packages/*/dist/
+packages/*/build/
+
+# Caches
+.turbo/
+**/.turbo/
+.vite/
+**/.vite/
+.cache/
+**/.cache/
+.eslintcache
+*.tsbuildinfo
+
+# Test and coverage artifacts
+coverage/
+**/coverage/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Storybook
+storybook-static/
+**/storybook-static/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Package manager artifacts
+.pnpm-store/
+.yarn/
+!.yarn/releases/
+!.yarn/plugins/
+!.yarn/sdks/
+!.yarn/versions/
+.pnp.*
+
+# Runtime and temporary files
+tmp/
+temp/
+.tmp/
+.temp/
+*.pid
+*.seed
+*.pid.lock
+
+# OS files
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Editor and IDE files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+*~
+
+# Local generated form smoke output
+features/admiral-command-smoke/
+features/admiral-command-smoke-multi/

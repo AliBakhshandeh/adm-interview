@@ -1,0 +1,23 @@
+{
+  "name": "@admiral/form-platform",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm",
+    "typecheck": "tsup src/index.ts --format esm",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/form-platform/src/platform.test.tsx",
+    "lint": "eslint src --max-warnings=0"
+  },
+  "dependencies": {
+    "@admiral/form-core": "workspace:*",
+    "@admiral/form-react": "workspace:*",
+    "@admiral/form-rules": "workspace:*",
+    "@admiral/form-schema": "workspace:*",
+    "@admiral/form-validation": "workspace:*",
+    "@admiral/telemetry": "workspace:*"
+  },
+  "peerDependencies": { "react": "^18.3.0" }
+}

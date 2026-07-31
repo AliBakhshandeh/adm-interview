@@ -1,0 +1,24 @@
+{
+  "name": "@admiral/showcase",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vite build",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src --max-warnings=0",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "dependencies": {
+    "@admiral/form-platform": "workspace:*",
+    "@admiral/form-ui": "workspace:*",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {}
+}
