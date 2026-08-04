@@ -1,7 +1,7 @@
 import type { FieldDefinition, FormDefinition, FormError, FormPlatformContext, FormPlatformError, FormSubmissionResult, FormValues, OptionDataSource, SelectOption } from "@admiral/form-schema";
 import type { FormPlatformTelemetry } from "@admiral/telemetry";
 import { noopTelemetry } from "@admiral/telemetry";
-import { affectedFields, buildDependencyGraph, evaluateCondition, evaluateRules, flattenFields, type DependencyGraph, type RuleEvaluationHistory } from "@admiral/form-rules";
+import { affectedFields, buildDependencyGraph, evaluateCondition, evaluateRules, flattenFields, type DependencyGraph, type RuleEvaluationHistory, type RuleEvaluationResult } from "@admiral/form-rules";
 import { createDefaultFieldRegistry, FieldRegistry, validateFormDefinition, validateValues } from "@admiral/form-validation";
 
 export type FormSubmissionState =
@@ -55,6 +55,11 @@ export type DraftRecord<TValues extends FormValues> = {
   formVersion: number;
   savedAt: string;
   expiresAt: string;
+};
+
+type LoadedDraft<TValues extends FormValues> = {
+  key: string;
+  record: DraftRecord<TValues>;
 };
 
 export interface DraftAdapter {
@@ -154,6 +159,10 @@ export class PluginRegistry {
     for (const contribution of this.contributions) contribution.onEvent?.(event);
   }
 
+  get draftAdapter(): DraftAdapter | undefined {
+    return this.contributions.find((contribution) => contribution.draftAdapter)?.draftAdapter;
+  }
+
   cleanup(): void {
     for (const contribution of this.contributions) contribution.cleanup?.();
   }
@@ -182,8 +191,10 @@ export class FormEngine<TValues extends FormValues> {
   private readonly optionControllers = new Map<string, AbortController>();
   private readonly optionCache = new Map<string, { options: SelectOption[]; nextCursor?: string }>();
   private readonly validationCache = new Map<string, boolean>();
+  private readonly fallbackDraftAdapter = new MemoryDraftAdapter();
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private validationController: AbortController | undefined;
+  private validationRunId = 0;
   private reviewedConflictVersion: number | undefined;
   state: FormState<TValues>;
 
@@ -195,11 +206,7 @@ export class FormEngine<TValues extends FormValues> {
       throw new Error(issues.map((issue) => issue.message).join("\n"));
     }
     this.graph = buildDependencyGraph(options.definition);
-    const rules = evaluateRules(options.definition, options.initialValues, undefined, options.context.locale);
-    for (const field of flattenFields(options.definition)) {
-      if (!canView(field.permission?.view, options.context)) rules.visible.delete(field.id);
-      if (!canEdit(field, options.context)) rules.readOnly.add(field.id);
-    }
+    const rules = this.composeFieldState(evaluateRules(options.definition, options.initialValues, undefined, options.context.locale));
     const key = createDraftKey(options.context, options.definition.id, options.context.entityId ?? "new", options.definition.version);
     this.state = {
       values: { ...options.initialValues },
@@ -234,7 +241,7 @@ export class FormEngine<TValues extends FormValues> {
   }
 
   get draftAdapter(): DraftAdapter {
-    return this.options.draftAdapter ?? new MemoryDraftAdapter();
+    return this.options.draftAdapter ?? this.plugins.draftAdapter ?? this.fallbackDraftAdapter;
   }
 
   subscribe(listener: () => void): () => void {
@@ -251,6 +258,7 @@ export class FormEngine<TValues extends FormValues> {
 
   setValue(fieldId: keyof TValues & string, value: TValues[typeof fieldId]): void {
     if (!this.state.enabledFields.has(fieldId) || this.state.readOnlyFields.has(fieldId)) return;
+    const startedAt = performance.now();
     this.state.values = { ...this.state.values, [fieldId]: value };
     this.state.dirtyFields.add(fieldId);
     this.state.touchedFields.add(fieldId);
@@ -260,11 +268,12 @@ export class FormEngine<TValues extends FormValues> {
     this.emitPluginEvent("field_changed", fieldId);
     this.scheduleDraftSave();
     this.notify(fieldId);
+    this.telemetry.measure("field_change_ms", performance.now() - startedAt, { ...this.eventAttributes(), fieldId });
   }
 
   addRepeatingItem(fieldId: keyof TValues & string, item: Record<string, unknown>): void {
     const current = Array.isArray(this.state.values[fieldId]) ? (this.state.values[fieldId] as unknown[]) : [];
-    this.setValue(fieldId, [...current, { id: crypto.randomUUID(), ...item }] as TValues[typeof fieldId]);
+    this.setValue(fieldId, [...current, { id: crypto.randomUUID(), ...this.defaultRepeatingItem(fieldId), ...item }] as TValues[typeof fieldId]);
   }
 
   removeRepeatingItem(fieldId: keyof TValues & string, itemId: string): void {
@@ -288,6 +297,7 @@ export class FormEngine<TValues extends FormValues> {
     if (!dataSource) {
       const failed: RemoteOptionsState = { status: "failed", options: field.options ?? [], error: `Missing data source "${field.dataSource.resource}".` };
       this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, failed);
+      this.emitPluginEvent("remote_options_failed", field.id);
       this.notify(field.id);
       return failed;
     }
@@ -298,6 +308,7 @@ export class FormEngine<TValues extends FormValues> {
     if (cached) {
       const loaded: RemoteOptionsState = cached.options.length ? remoteLoaded(cached.options, cached.nextCursor) : { status: "empty", options: [] };
       this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, loaded);
+      this.emitPluginEvent("remote_options_loaded", field.id);
       this.notify(field.id);
       return loaded;
     }
@@ -321,6 +332,7 @@ export class FormEngine<TValues extends FormValues> {
       this.optionCache.set(cacheKey, { options: combined, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) });
       const loaded: RemoteOptionsState = combined.length ? remoteLoaded(combined, page.nextCursor) : { status: "empty", options: [] };
       this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, loaded);
+      this.emitPluginEvent("remote_options_loaded", field.id);
       this.notify(field.id);
       return loaded;
     } catch (error) {
@@ -328,6 +340,7 @@ export class FormEngine<TValues extends FormValues> {
       const failed: RemoteOptionsState = { status: "failed", options: previous, error: error instanceof Error ? error.message : "Failed to load options." };
       this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, failed);
       this.telemetry.captureError(error, { ...this.eventAttributes(), fieldId: field.id, resource: field.dataSource.resource });
+      this.emitPluginEvent("remote_options_failed", field.id);
       this.notify(field.id);
       return failed;
     }
@@ -358,10 +371,15 @@ export class FormEngine<TValues extends FormValues> {
 
   private async validateFields(fieldIds?: Set<string>): Promise<FormError[]> {
     this.validationController?.abort();
-    this.validationController = new AbortController();
+    const runId = this.validationRunId + 1;
+    this.validationRunId = runId;
+    const controller = new AbortController();
+    this.validationController = controller;
+    const startedAt = performance.now();
     this.state.submission = { status: "validating" };
     this.state.pendingAsyncValidations = new Set(flattenFields(this.options.definition).filter((field) => (!fieldIds || fieldIds.has(field.id)) && this.state.visibleFields.has(field.id) && field.validation?.some((rule) => rule.type === "async" || rule.validate)).map((field) => field.id));
     this.telemetry.track("validation_started", this.eventAttributes());
+    this.emitPluginEvent("validation_started");
     this.notify();
     const errors = await validateValues({
       definition: this.options.definition,
@@ -371,12 +389,19 @@ export class FormEngine<TValues extends FormValues> {
       required: this.state.requiredFields,
       ...(fieldIds ? { fieldIds } : {}),
       cache: this.validationCache,
-      signal: this.validationController.signal
+      signal: controller.signal
     });
+    if (controller.signal.aborted || runId !== this.validationRunId) return errors;
     this.state.pendingAsyncValidations = new Set();
     this.state.errors = fieldIds ? [...this.state.errors.filter((error) => !error.fieldId || !fieldIds.has(error.fieldId)), ...errors] : errors;
-    if (errors.some((error) => error.severity === "error")) this.telemetry.track("validation_failed", { ...this.eventAttributes(), count: errors.length });
+    if (errors.some((error) => error.severity === "error")) {
+      this.telemetry.track("validation_failed", { ...this.eventAttributes(), count: errors.length });
+      this.emitPluginEvent("validation_failed");
+    } else {
+      this.emitPluginEvent("validation_succeeded");
+    }
     this.state.submission = this.state.errors.some((error) => error.severity === "error") ? { status: "validation-failed", errors: this.state.errors } : { status: "idle" };
+    this.telemetry.measure("validation_ms", performance.now() - startedAt, { ...this.eventAttributes(), fieldCount: fieldIds?.size ?? flattenFields(this.options.definition).length });
     this.notify();
     return errors;
   }
@@ -384,7 +409,10 @@ export class FormEngine<TValues extends FormValues> {
   async submit(): Promise<FormSubmissionState> {
     if (this.state.submission.status === "unknown" || this.state.submission.status === "submitting") return this.state.submission;
     const errors = await this.validate();
-    if (errors.some((error) => error.severity === "error")) return this.state.submission;
+    if (errors.some((error) => error.severity === "error")) {
+      this.emitPluginEvent("submission_validation_failed");
+      return this.state.submission;
+    }
     if (!this.options.definition.submission) {
       this.state.submission = { status: "succeeded", entityId: this.options.context.entityId ?? "demo-entity" };
       this.notify();
@@ -395,23 +423,30 @@ export class FormEngine<TValues extends FormValues> {
     this.telemetry.track("submission_started", this.eventAttributes());
     this.emitPluginEvent("submission_attempted");
     this.notify();
-    const result = await this.options.definition.submission.submit(this.state.values, this.submissionContext(), idempotencyKey);
-    this.applySubmissionResult(result, idempotencyKey);
+    try {
+      const result = await this.options.definition.submission.submit(this.state.values, this.submissionContext(), idempotencyKey);
+      this.applySubmissionResult(result, idempotencyKey);
+    } catch (error) {
+      this.state.submission = { status: "failed", error: normalizeSubmitError(error) };
+      this.telemetry.captureError(error, { ...this.eventAttributes(), idempotencyKey });
+      this.telemetry.track("submission_failed", this.eventAttributes());
+      this.emitPluginEvent("submission_failed");
+    }
     this.notify();
     return this.state.submission;
   }
 
   async restoreDraft(): Promise<boolean> {
-    const draft = await this.draftAdapter.load<TValues>(this.state.draft.key);
-    if (!draft) return false;
-    if (new Date(draft.expiresAt).getTime() < Date.now()) {
-      this.state.draft = { status: "expired", key: this.state.draft.key };
+    const loaded = await this.loadDraftCandidate();
+    if (!loaded) return false;
+    if (new Date(loaded.record.expiresAt).getTime() < Date.now()) {
+      this.state.draft = { status: "expired", key: loaded.key };
       return false;
     }
-    const migrated = migrateDraft(this.options.definition, draft.values, draft.formVersion);
+    const migrated = migrateDraft(this.options.definition, loaded.record.values, loaded.record.formVersion);
     this.state.values = migrated as TValues;
     this.recalculate();
-    this.state.draft = { status: "restored", key: this.state.draft.key, restoredAt: new Date().toISOString() };
+    this.state.draft = { status: "restored", key: loaded.key, restoredAt: new Date().toISOString() };
     this.telemetry.track("draft_restored", this.eventAttributes());
     this.emitPluginEvent("draft_restored");
     this.notify();
@@ -433,6 +468,7 @@ export class FormEngine<TValues extends FormValues> {
     } catch (error) {
       this.state.draft = { status: "failed", key, error: error instanceof Error ? error.message : "Draft save failed" };
       this.telemetry.track("draft_save_failed", this.eventAttributes());
+      this.emitPluginEvent("draft_save_failed");
     }
     this.notify();
   }
@@ -440,6 +476,8 @@ export class FormEngine<TValues extends FormValues> {
   async discardDraft(): Promise<void> {
     await this.draftAdapter.discard(this.state.draft.key);
     this.state.draft = { status: "idle", key: this.state.draft.key };
+    this.telemetry.track("draft_discarded", this.eventAttributes());
+    this.emitPluginEvent("draft_discarded");
     this.notify();
   }
 
@@ -472,14 +510,16 @@ export class FormEngine<TValues extends FormValues> {
   async goToStep(step: number): Promise<boolean> {
     const bounded = Math.max(0, Math.min(step, (this.options.definition.steps?.length ?? 1) - 1));
     if (bounded > this.state.currentStep) {
-      const errors = await this.validateStep(this.state.currentStep);
-      if (errors.some((error) => error.severity === "error")) return false;
+      for (let index = this.state.currentStep; index < bounded; index += 1) {
+        const errors = await this.validateStep(index);
+        if (errors.some((error) => error.severity === "error")) return false;
+      }
     }
     const target = this.steps()[bounded];
     if (target?.canNavigateTo && !evaluateCondition(target.canNavigateTo, this.state.values)) return false;
     this.state.currentStep = bounded;
     this.notify();
-    this.emitPluginEvent("step_completed");
+    this.emitPluginEvent("step_changed");
     return true;
   }
 
@@ -493,29 +533,40 @@ export class FormEngine<TValues extends FormValues> {
     return new Set(this.options.definition.sections.filter((section) => sectionIds.has(section.id)).flatMap((section) => section.fields.map((field) => field.id)));
   }
 
+  private defaultRepeatingItem(fieldId: string): Record<string, unknown> {
+    const field = flattenFields(this.options.definition).find((candidate) => candidate.id === fieldId);
+    if (!field || field.type !== "repeating-group" || !("fields" in field)) return {};
+    return Object.fromEntries(field.fields.map((child) => [child.id, child.defaultValue ?? defaultValueForField(child)]));
+  }
+
   private applySubmissionResult(result: FormSubmissionResult<TValues>, idempotencyKey: string): void {
     switch (result.status) {
       case "succeeded":
         this.state.submission = { status: "succeeded", entityId: result.entityId };
         this.telemetry.track("submission_succeeded", this.eventAttributes());
+        this.emitPluginEvent("submission_succeeded");
         break;
       case "validation-failed":
         this.state.errors = result.errors;
         this.state.submission = { status: "validation-failed", errors: result.errors };
+        this.emitPluginEvent("submission_validation_failed");
         break;
       case "conflict": {
         const changedFields = Object.keys(result.latestValues).filter((key) => this.state.baseValues[key] !== result.latestValues[key]);
         this.state.submission = { status: "conflict", currentVersion: result.currentVersion, latestValues: result.latestValues, changedFields };
         this.telemetry.track("submission_conflict", { ...this.eventAttributes(), changedFields: changedFields.length });
+        this.emitPluginEvent("submission_conflict");
         break;
       }
       case "unknown":
         this.state.submission = { status: "unknown", idempotencyKey: result.idempotencyKey || idempotencyKey, checking: false };
         this.telemetry.track("submission_unknown", this.eventAttributes());
+        this.emitPluginEvent("submission_unknown");
         break;
       case "failed":
         this.state.submission = { status: "failed", error: result.error };
         this.telemetry.track("submission_failed", this.eventAttributes());
+        this.emitPluginEvent("submission_failed");
         break;
     }
   }
@@ -532,7 +583,8 @@ export class FormEngine<TValues extends FormValues> {
   }
 
   private recalculate(changedFieldId?: string): void {
-    const rules = evaluateRules(this.options.definition, this.state.values, undefined, this.options.context.locale);
+    const startedAt = performance.now();
+    const rules = this.composeFieldState(evaluateRules(this.options.definition, this.state.values, undefined, this.options.context.locale));
     this.state.visibleFields = rules.visible;
     this.state.enabledFields = rules.enabled;
     this.state.readOnlyFields = rules.readOnly;
@@ -543,7 +595,50 @@ export class FormEngine<TValues extends FormValues> {
     for (const [target, value] of rules.defaults) {
       if (this.state.values[target] === undefined) this.state.values = { ...this.state.values, [target]: value };
     }
-    if (changedFieldId) this.telemetry.track("rule_evaluated", { ...this.eventAttributes(), fieldId: changedFieldId, affectedCount: affectedFields(this.graph, changedFieldId).size });
+    if (changedFieldId) {
+      const affectedCount = affectedFields(this.graph, changedFieldId).size;
+      this.telemetry.track("rule_evaluated", { ...this.eventAttributes(), fieldId: changedFieldId, affectedCount });
+      this.telemetry.measure("rule_evaluation_ms", performance.now() - startedAt, { ...this.eventAttributes(), fieldId: changedFieldId, affectedCount });
+    }
+  }
+
+  private async loadDraftCandidate(): Promise<LoadedDraft<TValues> | undefined> {
+    for (const key of this.draftCandidateKeys()) {
+      const record = await this.draftAdapter.load<TValues>(key);
+      if (record) return { key, record };
+    }
+    return undefined;
+  }
+
+  private draftCandidateKeys(): string[] {
+    const entityOrDraftId = this.options.context.entityId ?? "new";
+    const keys: string[] = [];
+    for (let version = this.options.definition.version; version >= 1; version -= 1) {
+      keys.push(createDraftKey(this.options.context, this.options.definition.id, entityOrDraftId, version));
+    }
+    return keys;
+  }
+
+  private composeFieldState(rules: RuleEvaluationResult): RuleEvaluationResult {
+    const formCanView = canView(this.options.definition.permission?.view, this.options.context);
+    const formCanEdit = canView(this.options.definition.permission?.edit, this.options.context);
+    const sectionsByField = new Map<string, { canView: boolean; canEdit: boolean }>();
+    for (const section of this.options.definition.sections) {
+      const sectionState = {
+        canView: canView(section.permission?.view, this.options.context),
+        canEdit: canView(section.permission?.edit, this.options.context)
+      };
+      for (const field of section.fields) sectionsByField.set(field.id, sectionState);
+    }
+    for (const field of flattenFields(this.options.definition)) {
+      const section = sectionsByField.get(field.id) ?? { canView: true, canEdit: true };
+      if (!formCanView || !section.canView || !canView(field.permission?.view, this.options.context)) {
+        rules.visible.delete(field.id);
+        rules.enabled.delete(field.id);
+      }
+      if (!formCanEdit || !section.canEdit || !canEdit(field, this.options.context)) rules.readOnly.add(field.id);
+    }
+    return rules;
   }
 
   private scheduleDraftSave(): void {
@@ -603,6 +698,22 @@ function remoteLoaded(options: SelectOption[], nextCursor?: string): RemoteOptio
 
 function isEmptyValue(value: unknown): boolean {
   return value === undefined || value === null || value === "" || (Array.isArray(value) && value.length === 0);
+}
+
+function defaultValueForField(field: FieldDefinition<FormValues>): unknown {
+  if (field.type === "number" || field.type === "currency") return 0;
+  if (field.type === "checkbox") return false;
+  if (field.type === "multi-select" || field.type === "file" || field.type === "repeating-group") return [];
+  return "";
+}
+
+function normalizeSubmitError(error: unknown): FormPlatformError {
+  if (isFormPlatformError(error)) return error;
+  return { type: "unknown", message: error instanceof Error ? error.message : "Submission failed." };
+}
+
+function isFormPlatformError(error: unknown): error is FormPlatformError {
+  return typeof error === "object" && error !== null && "type" in error;
 }
 
 function compareVersions(actual: string, required: string): number {

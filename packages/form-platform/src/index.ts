@@ -12,6 +12,8 @@ export function attachmentPlugin(config: { maxSizeMb: number; acceptedTypes: str
     id: "attachment",
     version: "0.1.0",
     setup({ registry }) {
+      if (registry.has("file")) registry.configure("file", { config });
+      else registry.register({ type: "file", config });
       if (!registry.has("attachment")) registry.register({ type: "attachment", config });
       return {
         onEvent: () => undefined
@@ -28,7 +30,7 @@ export function auditTrailPlugin(events: Array<{ event: string; fieldId?: string
       return {
         auditEvents: events,
         onEvent(event) {
-          events.push({ ...event, metadata: event.metadata ? { ...event.metadata, value: "[excluded]" } : undefined });
+          events.push({ ...event, ...(event.metadata ? { metadata: { ...event.metadata, value: "[excluded]" } } : {}) });
         }
       };
     }

@@ -114,9 +114,23 @@ export type CalculatedConfig<TValues extends FormValues, TValue> = {
   precision?: number;
 };
 
+export type BuiltInFieldType =
+  | "text"
+  | "textarea"
+  | "date"
+  | "checkbox"
+  | "file"
+  | "number"
+  | "currency"
+  | "select"
+  | "radio"
+  | "multi-select"
+  | "repeating-group"
+  | "calculated";
+
 export type BaseField<TValues extends FormValues, TValue = unknown, TConfig = unknown> = {
   id: FieldId<TValues>;
-  type: string;
+  type: BuiltInFieldType;
   label: LocalizedText;
   helpText?: LocalizedText;
   defaultValue?: TValue;
@@ -133,6 +147,12 @@ export type BaseField<TValues extends FormValues, TValue = unknown, TConfig = un
   config?: TConfig;
 };
 
+export type CustomFieldDefinition<TValues extends FormValues = FormValues, TValue = unknown, TConfig = unknown> =
+  Omit<BaseField<TValues, TValue, TConfig>, "type"> & {
+    type: string;
+    custom: true;
+  };
+
 export type FieldDefinition<TValues extends FormValues = FormValues> =
   | (BaseField<TValues> & { type: "text" | "textarea" | "date" | "checkbox" | "file" })
   | (BaseField<TValues, number> & { type: "number" | "currency" })
@@ -140,7 +160,7 @@ export type FieldDefinition<TValues extends FormValues = FormValues> =
   | (BaseField<TValues, string[]> & { type: "multi-select"; options?: SelectOption[] })
   | (BaseField<TValues, unknown[]> & { type: "repeating-group"; fields: FieldDefinition<Record<string, unknown>>[]; minItems?: number; maxItems?: number })
   | (BaseField<TValues> & { type: "calculated"; calculated: CalculatedConfig<TValues, unknown> })
-  | (BaseField<TValues> & { type: string });
+  | CustomFieldDefinition<TValues>;
 
 export type SectionDefinition<TValues extends FormValues> = {
   id: string;

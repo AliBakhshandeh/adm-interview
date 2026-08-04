@@ -7,6 +7,7 @@ export type FieldRegistryEntry<TValue = unknown, TConfig = unknown> = {
   parse?: (input: unknown) => TValue;
   format?: (value: TValue) => unknown;
   validate?: ValidationRule[];
+  render?: unknown;
   config?: TConfig;
 };
 
@@ -16,6 +17,12 @@ export class FieldRegistry {
   register(entry: FieldRegistryEntry): void {
     if (this.entries.has(entry.type)) throw new Error(`Field type "${entry.type}" is already registered.`);
     this.entries.set(entry.type, entry);
+  }
+
+  configure(type: string, patch: Partial<Omit<FieldRegistryEntry, "type">>): void {
+    const current = this.entries.get(type);
+    if (!current) throw new Error(`Field type "${type}" is not registered.`);
+    this.entries.set(type, { ...current, ...patch, type });
   }
 
   has(type: string): boolean {
@@ -57,6 +64,15 @@ export function validateFormDefinition<TValues extends FormValues>(
       fieldIds.add(field.id);
       if (!registry.has(field.type)) issues.push({ code: "unsupported-field-type", message: `Field "${field.id}" uses unsupported field type "${field.type}".`, path: field.id });
       if (field.required && field.visibility) issues.push({ code: "required-hidden-risk", message: `Field "${field.id}" is statically required and conditionally visible; prefer requiredWhen.`, path: field.id });
+      if (field.type === "repeating-group" && "fields" in field) {
+        if (field.fields.length === 0) issues.push({ code: "empty-repeating-group", message: `Repeating group "${field.id}" must define nested fields.`, path: field.id });
+        const childIds = new Set<string>();
+        for (const child of field.fields) {
+          if (childIds.has(child.id)) issues.push({ code: "duplicate-repeating-field-id", message: `Repeating group "${field.id}" has duplicate child field "${child.id}".`, path: `${field.id}.${child.id}` });
+          childIds.add(child.id);
+          if (!registry.has(child.type)) issues.push({ code: "unsupported-repeating-field-type", message: `Repeating group "${field.id}" child "${child.id}" uses unsupported field type "${child.type}".`, path: `${field.id}.${child.id}` });
+        }
+      }
     }
   }
   for (const step of definition.steps ?? []) {
