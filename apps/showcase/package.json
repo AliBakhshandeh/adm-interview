@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "vite build",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. --config vitest.config.ts apps/showcase/src/forms.test.tsx",
     "lint": "eslint src --max-warnings=0",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build"

@@ -443,7 +443,7 @@ pnpm test
 pnpm e2e
 ```
 
-Test coverage includes schema validation, duplicate fields, unknown dependencies, circular dependencies, topological ordering, rules, calculated values, cross-field validation, permissions, draft keys, tenant isolation, migrations, plugin behavior, conflicts, unknown submissions, repeating identity, generator behavior, and large-form performance.
+Test coverage currently runs 73 unit/integration assertions across 11 populated test files, plus six Playwright E2E journeys. Coverage includes schema validation, duplicate fields, unknown dependencies, circular dependencies, topological ordering, rules, calculated values, cross-field validation, permissions, draft keys, tenant isolation, migrations, plugin behavior, conflicts, unknown submissions, repeating identity, generator behavior, leaf package smoke contracts, and large-form performance.
 
 ## Governance
 
