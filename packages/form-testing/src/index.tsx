@@ -1,5 +1,5 @@
 import React from "react";
-import { render } from "@testing-library/react";
+import { render, type RenderResult } from "@testing-library/react";
 import { FormRenderer, MemoryDraftAdapter, type FormDefinition, type FormPlatformContext, type FormValues } from "@admiral/form-platform";
 
 export function testContext(overrides: Partial<FormPlatformContext> = {}): FormPlatformContext {
@@ -18,7 +18,7 @@ export function renderFormPlatform<TValues extends FormValues>(params: {
   definition: FormDefinition<TValues>;
   initialValues: TValues;
   context?: Partial<FormPlatformContext>;
-}) {
+}): RenderResult & { draftAdapter: MemoryDraftAdapter } {
   const draftAdapter = new MemoryDraftAdapter();
   return {
     draftAdapter,

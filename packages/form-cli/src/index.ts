@@ -20,8 +20,8 @@ export function generate(name: string, template = "basic"): void {
   mkdirSync(dir, { recursive: true });
   const pascal = name.split("-").map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
   const files: Record<string, string> = {
-    [`${name}.schema.ts`]: `export type ${pascal}Value = { reference: string; notes?: string };\n`,
-    [`${name}.form.ts`]: `import type { FormDefinition } from "@admiral/form-platform";\nimport type { ${pascal}Value } from "./${name}.schema";\n\nexport const ${camel(name)}Form: FormDefinition<${pascal}Value> = {\n  id: "${name}",\n  version: 1,\n  title: "${pascal}",\n  sections: [{ id: "general", title: "General", fields: [{ id: "reference", type: "text", label: "Reference", required: true }] }],\n  steps: ${template === "multi-step" ? `[{ id: "general", title: "General", sectionIds: ["general"] }]` : "undefined"}\n};\n`,
+    [`${name}.schema.ts`]: `export type ${pascal}Value = Record<string, unknown> & { reference: string; notes?: string };\n`,
+    [`${name}.form.ts`]: `import type { FormDefinition } from "@admiral/form-platform";\nimport type { ${pascal}Value } from "./${name}.schema";\n\nexport const ${camel(name)}Form: FormDefinition<${pascal}Value> = {\n  id: "${name}",\n  version: 1,\n  title: "${pascal}",\n  sections: [{ id: "general", title: "General", fields: [{ id: "reference", type: "text", label: "Reference", required: true }] }]${template === "multi-step" ? `,\n  steps: [{ id: "general", title: "General", sectionIds: ["general"] }]` : ""}\n};\n`,
     [`${name}.rules.ts`]: `export const ${camel(name)}Rules = [];\n`,
     [`${name}.validation.ts`]: `export const ${camel(name)}Validation = [];\n`,
     [`${name}.datasource.ts`]: `export const ${camel(name)}DataSources = {};\n`,

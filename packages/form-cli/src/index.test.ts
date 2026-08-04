@@ -1,11 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { generate, validateFormName } from "./index";
 
 let cwd: string | undefined;
 const originalCwd = process.cwd();
+const repoRoot = join(originalCwd, "..", "..");
 
 afterEach(() => {
   process.chdir(originalCwd);
@@ -33,6 +35,33 @@ describe("admiral-form generator", () => {
     expect(form).toContain("FormDefinition<ShipmentBookingValue>");
     expect(form).toContain("sectionIds");
     expect(test).toContain("generates a valid form definition");
+  });
+
+  it("omits optional steps for the basic template", () => {
+    const root = useTempCwd();
+    generate("invoice-request");
+    const form = readFileSync(join(root, "features", "invoice-request", "invoice-request.form.ts"), "utf8");
+    expect(form).not.toContain("steps: undefined");
+  });
+
+  it("generates templates that compile in a strict consumer project", () => {
+    const root = useTempCwd();
+    generate("invoice-request");
+    generate("shipment-booking", "multi-step");
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({
+      compilerOptions: {
+        strict: true,
+        exactOptionalPropertyTypes: true,
+        module: "ESNext",
+        target: "ES2022",
+        moduleResolution: "Bundler",
+        skipLibCheck: true,
+        baseUrl: repoRoot,
+        paths: { "@admiral/form-platform": ["packages/form-platform/src/index.ts"] }
+      },
+      include: ["features/**/*.ts"]
+    }, null, 2));
+    execFileSync("pnpm", ["exec", "tsc", "--noEmit", "-p", join(root, "tsconfig.json")], { cwd: repoRoot, stdio: "pipe" });
   });
 
   it("refuses to overwrite existing generated directories", () => {

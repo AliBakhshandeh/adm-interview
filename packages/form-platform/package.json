@@ -6,7 +6,7 @@
   "types": "./dist/index.d.ts",
   "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
   "scripts": {
-    "build": "tsup src/index.ts --format esm",
+    "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsup src/index.ts --format esm",
     "test": "vitest run --root ../.. --config vitest.config.ts packages/form-platform/src/platform.test.tsx",
     "lint": "eslint src --max-warnings=0"

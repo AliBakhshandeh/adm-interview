@@ -23,9 +23,9 @@
       "@admiral/form-schema": ["packages/form-schema/src/index.ts"],
       "@admiral/form-rules": ["packages/form-rules/src/index.ts"],
       "@admiral/form-validation": ["packages/form-validation/src/index.ts"],
-      "@admiral/form-react": ["packages/form-react/src/index.ts"],
-      "@admiral/form-ui": ["packages/form-ui/src/index.ts"],
-      "@admiral/form-testing": ["packages/form-testing/src/index.ts"],
+      "@admiral/form-react": ["packages/form-react/src/index.tsx"],
+      "@admiral/form-ui": ["packages/form-ui/src/index.tsx"],
+      "@admiral/form-testing": ["packages/form-testing/src/index.tsx"],
       "@admiral/telemetry": ["packages/telemetry/src/index.ts"]
     }
   }
