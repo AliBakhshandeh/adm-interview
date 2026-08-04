@@ -15,6 +15,7 @@ export type FormRendererProps<TValues extends FormValues> = {
   plugins?: FormPlugin[];
   dataSources?: Record<string, OptionDataSource<SelectOption>>;
   stateOverrides?: FormEngineOptions<TValues>["stateOverrides"];
+  showDebug?: boolean;
 };
 
 export type FieldRendererContext<TValues extends FormValues = FormValues> = {
@@ -55,7 +56,7 @@ export function FormRenderer<TValues extends FormValues>(props: FormRendererProp
   const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition.id, props.definition.version, props.context.tenantId, props.context.userId]);
   return (
     <FormContext.Provider value={engine as FormEngine<FormValues>}>
-      <EnterpriseForm definition={props.definition} />
+      <EnterpriseForm definition={props.definition} showDebug={Boolean(props.showDebug)} />
     </FormContext.Provider>
   );
 }
@@ -73,7 +74,7 @@ function compactEngineOptions<TValues extends FormValues>(props: FormRendererPro
   };
 }
 
-function EnterpriseForm<TValues extends FormValues>({ definition }: { definition: FormDefinition<TValues> }): JSX.Element {
+function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: { definition: FormDefinition<TValues>; showDebug: boolean }): JSX.Element {
   const engine = useFormEngine<TValues>();
   const state = useFormSnapshot<TValues>();
   const locale = engine["options"].context.locale;
@@ -128,7 +129,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition }: { definition
         {state.currentStep < steps.length - 1 ? <Button type="button" tone="primary" onClick={() => void engine.goToStep(state.currentStep + 1)}>{copy.next}</Button> : <Button type="submit" tone="primary">{copy.submit}</Button>}
       </footer>
       <SubmissionPanel fields={allFields} />
-      <DebugPanel fields={allFields} />
+      {showDebug ? <DebugPanel fields={allFields} /> : null}
     </form>
   );
 }
@@ -148,6 +149,7 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
   const describedBy = describedByFor(field, state.pendingAsyncValidations.has(field.id), errors.length > 0);
   const common = { id: field.id, disabled, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
   const customRenderer = engine.registry.get(field.type)?.render as CustomFieldRenderer<TValues> | undefined;
+  const attachmentConfig = field.type === "file" ? attachmentConfigFor(engine, field) : defaultAttachmentConfig;
   const customField = customRenderer?.({
     field,
     engine,
@@ -191,9 +193,10 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
           disabled={disabled}
           label={copy.uploadDocuments}
           files={Array.isArray(value) ? value as FormAttachment[] : []}
+          accept={attachmentConfig.acceptedTypes.join(",")}
           actionLabels={copy.fileActions}
           statusLabels={copy.fileStatuses}
-          onFiles={(files) => attachFiles(engine, field.id, files)}
+          onFiles={(files) => attachFiles(engine, field.id, files, attachmentConfig)}
           onRemove={(fileId) => removeAttachment(engine, field.id, fileId)}
           onRetry={(fileId) => retryAttachment(engine, field.id, fileId)}
           onCancel={(fileId) => cancelAttachment(engine, field.id, fileId)}
@@ -401,21 +404,23 @@ function defaultValueForField(field: FieldDefinition<FormValues>): unknown {
 }
 
 type FormAttachment = { id: string; name: string; size: number; type?: string; status: "idle" | "uploading" | "uploaded" | "failed" | "removing" | "removed"; error?: string };
+type AttachmentConfig = { maxSizeMb: number; acceptedTypes: string[] };
 
-const acceptedAttachmentTypes = new Set(["application/pdf", "image/png", "image/jpeg", "text/plain"]);
-const maxAttachmentSize = 10 * 1024 * 1024;
+const defaultAttachmentConfig: AttachmentConfig = { maxSizeMb: 10, acceptedTypes: ["application/pdf", "image/png", "image/jpeg", "text/plain"] };
 
 function currentAttachments<TValues extends FormValues>(engine: FormEngine<TValues>, fieldId: keyof TValues & string): FormAttachment[] {
   const value = engine.state.values[fieldId];
   return Array.isArray(value) ? value as FormAttachment[] : [];
 }
 
-function attachFiles<TValues extends FormValues>(engine: FormEngine<TValues>, fieldId: keyof TValues & string, files: File[]): void {
+function attachFiles<TValues extends FormValues>(engine: FormEngine<TValues>, fieldId: keyof TValues & string, files: File[], config: AttachmentConfig): void {
   const existing = currentAttachments(engine, fieldId);
+  const acceptedTypes = new Set(config.acceptedTypes);
+  const maxSize = config.maxSizeMb * 1024 * 1024;
   const records = files.map((file) => {
     const duplicate = existing.some((item) => item.name === file.name && item.size === file.size && item.status !== "removed");
-    const invalidType = file.type && !acceptedAttachmentTypes.has(file.type);
-    const tooLarge = file.size > maxAttachmentSize;
+    const invalidType = file.type && !acceptedTypes.has(file.type);
+    const tooLarge = file.size > maxSize;
     const failed = duplicate || invalidType || tooLarge;
     return {
       id: crypto.randomUUID(),
@@ -423,11 +428,23 @@ function attachFiles<TValues extends FormValues>(engine: FormEngine<TValues>, fi
       size: file.size,
       type: file.type,
       status: failed ? "failed" : "uploading",
-      ...(failed ? { error: duplicate ? "Duplicate file" : invalidType ? "Unsupported file type" : "File is larger than 10 MB" } : {})
+      ...(failed ? { error: duplicate ? "Duplicate file" : invalidType ? "Unsupported file type" : `File is larger than ${config.maxSizeMb} MB` } : {})
     } satisfies FormAttachment;
   });
   engine.setValue(fieldId, [...existing, ...records] as TValues[typeof fieldId]);
   for (const record of records.filter((item) => item.status === "uploading")) finishAttachmentUpload(engine, fieldId, record.id);
+}
+
+function attachmentConfigFor<TValues extends FormValues>(engine: FormEngine<TValues>, field: FieldDefinition<TValues>): AttachmentConfig {
+  const config = engine.registry.get(field.type)?.config;
+  if (!isAttachmentConfig(config)) return defaultAttachmentConfig;
+  return config;
+}
+
+function isAttachmentConfig(config: unknown): config is AttachmentConfig {
+  if (typeof config !== "object" || config === null) return false;
+  const candidate = config as Partial<AttachmentConfig>;
+  return typeof candidate.maxSizeMb === "number" && Array.isArray(candidate.acceptedTypes) && candidate.acceptedTypes.every((type) => typeof type === "string");
 }
 
 function finishAttachmentUpload<TValues extends FormValues>(engine: FormEngine<TValues>, fieldId: keyof TValues & string, fileId: string): void {

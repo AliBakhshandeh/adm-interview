@@ -341,6 +341,27 @@ describe("form platform integration coverage", () => {
     expect(screen.getByRole("button", { name: /Rating 5/i })).toBeInTheDocument();
   });
 
+  it("does not expose debug values unless explicitly enabled", () => {
+    renderFormPlatform({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, bookingReference: "BK-SECRET" } });
+    expect(screen.queryByText("Debug")).not.toBeInTheDocument();
+  });
+
+  it("uses registry attachment config for file validation", async () => {
+    const registry = createDefaultFieldRegistry();
+    registry.configure("file", { config: { maxSizeMb: 1, acceptedTypes: ["application/pdf"] } });
+    const definition: FormDefinition<{ attachments: unknown[] }> = {
+      id: "file-config",
+      version: 1,
+      title: "File config",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "attachments", type: "file", label: "Attachments" }] }]
+    };
+    const view = render(<FormRenderer definition={definition} initialValues={{ attachments: [] }} context={testContext()} registry={registry} draftAdapter={new MemoryDraftAdapter()} />);
+    const input = view.container.querySelector<HTMLInputElement>("input[type='file']");
+    expect(input).toHaveAttribute("accept", "application/pdf");
+    fireEvent.change(input!, { target: { files: [new File(["hello"], "notes.txt", { type: "text/plain" })] } });
+    expect(await screen.findByText("Unsupported file type")).toBeInTheDocument();
+  });
+
   it("links validation errors to the invalid input", async () => {
     renderFormPlatform({ definition: shipmentBookingForm, initialValues: bookingInitialValues });
     fireEvent.click(screen.getByText("Next"));

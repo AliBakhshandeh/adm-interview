@@ -78,3 +78,25 @@ test("Journey E - axe accessibility audit for primary journey", async ({ page })
   const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
   expect(accessibilityScanResults.violations).toEqual([]);
 });
+
+test("Journey F - employee RTL payroll permission and async validation", async ({ page }) => {
+  await page.getByLabel("Tenant").selectOption("tenant-b");
+  await page.getByRole("button", { name: "FA" }).click();
+  await expect(page.locator(".dashboard-shell")).toHaveAttribute("dir", "rtl");
+  await page.getByRole("button", { name: "شروع همکاری" }).click();
+  await expect(page.getByRole("heading", { name: "شروع همکاری کارمند" })).toBeVisible();
+
+  await page.getByLabel("نام کامل").fill("Ali Review");
+  await page.getByLabel("کد ملی").fill("1111111111");
+  await page.getByRole("button", { name: "بعدی" }).click();
+  await expect(page.locator("#nationalId-error")).toHaveText("این کد ملی قبلا ثبت شده است.");
+
+  await page.getByLabel("کد ملی").fill("2222222222");
+  await page.getByRole("button", { name: "بعدی" }).click();
+  await page.getByLabel("دپارتمان").selectOption("finance");
+  await expect(page.getByLabel("مدیر مستقیم")).toContainText("آرمان کاظمی - B");
+  await page.getByLabel("سمت").fill("Platform Engineer");
+  await page.getByLabel("تاریخ شروع").fill("2026-09-01");
+  await page.getByRole("button", { name: "بعدی" }).click();
+  await expect(page.getByLabel("حقوق")).toBeDisabled();
+});

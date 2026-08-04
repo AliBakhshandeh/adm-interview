@@ -64,7 +64,7 @@ Setup failures are reported to telemetry through `plugin_failed` and `captureErr
 
 ## Attachment Plugin
 
-The attachment plugin registers an `attachment` field type. The React layer demonstrates the file behavior through the file field UI:
+The attachment plugin configures the built-in `file` field type and also registers an `attachment` alias for compatibility. The React file UI consumes the registry config for accepted MIME types and maximum size, then demonstrates these lifecycle states:
 
 - idle
 - uploading

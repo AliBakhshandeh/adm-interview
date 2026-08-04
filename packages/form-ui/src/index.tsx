@@ -113,7 +113,7 @@ export type AttachedFilePreview = {
   error?: string;
 };
 
-export function FileDrop({ id, onFiles, onRemove, onRetry, onCancel, disabled, label = "Upload documents", files = [], actionLabels, statusLabels }: { id?: string; disabled?: boolean; label?: string; files?: AttachedFilePreview[]; actionLabels?: { remove: string; retry: string; cancel: string }; statusLabels?: Record<string, string>; onFiles: (files: File[]) => void; onRemove?: (fileId: string) => void; onRetry?: (fileId: string) => void; onCancel?: (fileId: string) => void }): JSX.Element {
+export function FileDrop({ id, onFiles, onRemove, onRetry, onCancel, disabled, label = "Upload documents", files = [], accept, actionLabels, statusLabels }: { id?: string; disabled?: boolean; label?: string; files?: AttachedFilePreview[]; accept?: string; actionLabels?: { remove: string; retry: string; cancel: string }; statusLabels?: Record<string, string>; onFiles: (files: File[]) => void; onRemove?: (fileId: string) => void; onRetry?: (fileId: string) => void; onCancel?: (fileId: string) => void }): JSX.Element {
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault();
     if (disabled) return;
@@ -125,7 +125,7 @@ export function FileDrop({ id, onFiles, onRemove, onRetry, onCancel, disabled, l
         <Upload size={20} />
         <span>{label}</span>
       </label>
-      <input id={id} type="file" multiple disabled={disabled} onChange={(event) => onFiles(Array.from(event.currentTarget.files ?? []))} />
+      <input id={id} type="file" multiple disabled={disabled} accept={accept} onChange={(event) => onFiles(Array.from(event.currentTarget.files ?? []))} />
       {files.length ? (
         <ul className="af-file-list" aria-live="polite">
           {files.map((file, index) => (
