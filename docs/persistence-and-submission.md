@@ -40,7 +40,7 @@ Implemented:
 - automatic debounced save
 - explicit save
 - restore
-- discard
+- discard through the engine and React form actions
 - saved indicator
 - save failure state
 - expiration handling

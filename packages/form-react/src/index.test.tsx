@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createDefaultFieldRegistry } from "@admiral/form-validation";
 import { MemoryDraftAdapter } from "@admiral/form-core";
 import type { FormDefinition, FormPlatformContext } from "@admiral/form-schema";
@@ -45,6 +45,26 @@ describe("form-react", () => {
     expect(screen.getByLabelText("Discount")).toBeDisabled();
   });
 
+  it("exposes draft discard from the form actions", async () => {
+    const draftAdapter = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => undefined),
+      discard: vi.fn(async () => undefined)
+    };
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "draft-actions",
+      version: 1,
+      title: "Draft actions",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "reference", type: "text", label: "Reference" }] }]
+    };
+    render(<FormRenderer definition={definition} initialValues={{ reference: "REF-1" }} context={context} draftAdapter={draftAdapter} />);
+    expect(screen.getByRole("button", { name: "Discard draft" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Discard draft" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Discard draft" }));
+    await waitFor(() => expect(draftAdapter.discard).toHaveBeenCalled());
+  });
+
   it("keeps unrelated custom field renderers isolated", () => {
     const registry = createDefaultFieldRegistry();
     const renderA = vi.fn(({ setValue }) => <button type="button" onClick={() => setValue("changed")}>Change A</button>);
@@ -68,11 +88,12 @@ describe("form-react", () => {
     expect(renderB).toHaveBeenCalledTimes(1);
   });
 
-  it("renders repeating select radio and custom controls with item semantics", () => {
+  it("renders repeating select radio custom conditional and remote controls with item semantics", async () => {
     const registry = createDefaultFieldRegistry();
     const customRenderer = vi.fn(({ value, setValue, describedBy }) => <input aria-label="Custom note" aria-describedby={describedBy} value={String(value ?? "")} onChange={(event) => setValue(event.currentTarget.value)} />);
     registry.register({ type: "custom-note", render: customRenderer });
     const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const approvers = { search: vi.fn(async (query) => ({ items: query.dependencies?.relation === "manager" ? [{ value: "lead", label: "Team lead" }] : [] })) };
     const definition = {
       id: "repeating-render",
       version: 1,
@@ -84,13 +105,18 @@ describe("form-react", () => {
         fields: [
           { id: "relation", type: "select", label: "Relation", options: [{ value: "manager", label: "Manager" }] },
           { id: "channel", type: "radio", label: "Channel", options: [{ value: "email", label: "Email" }, { value: "phone", label: "Phone" }] },
+          { id: "approver", type: "select", label: "Approver", dataSource: { type: "remote", resource: "approvers", dependsOn: ["relation"] } },
+          { id: "managerNote", type: "text", label: "Manager note", visibility: { field: "relation", operator: "equals", value: "manager" }, requiredWhen: { field: "relation", operator: "equals", value: "manager" } },
           { id: "note", type: "custom-note", custom: true, label: "Note" }
         ]
       }] }]
-    } as unknown as FormDefinition<{ contacts: Array<{ id: string; relation: string; channel: string; note: string }> }>;
-    render(<FormRenderer definition={definition} initialValues={{ contacts: [{ id: "one", relation: "", channel: "", note: "" }] }} context={context} registry={registry} stateOverrides={{ errors: [{ fieldId: "contacts[0].note", message: "Note failed.", severity: "error", source: "client" }] }} telemetry={telemetry} draftAdapter={new MemoryDraftAdapter()} />);
+    } as unknown as FormDefinition<{ contacts: Array<{ id: string; relation: string; channel: string; approver: string; managerNote: string; note: string }> }>;
+    render(<FormRenderer definition={definition} initialValues={{ contacts: [{ id: "one", relation: "manager", channel: "", approver: "", managerNote: "", note: "" }] }} context={context} registry={registry} dataSources={{ approvers }} stateOverrides={{ errors: [{ fieldId: "contacts[0].note", message: "Note failed.", severity: "error", source: "client" }] }} telemetry={telemetry} draftAdapter={new MemoryDraftAdapter()} />);
     expect(screen.getByLabelText("Relation")).toBeInTheDocument();
     expect(screen.getByRole("radiogroup", { name: /channel/i })).toHaveAttribute("aria-labelledby");
+    expect(screen.getByText(/Manager note/)).toHaveTextContent("*");
+    await waitFor(() => expect(approvers.search).toHaveBeenCalledWith(expect.objectContaining({ dependencies: { relation: "manager" } }), expect.any(Object), expect.any(AbortSignal)));
+    expect(await screen.findByText("Team lead")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Custom note"), { target: { value: "Updated" } });
     expect(customRenderer).toHaveBeenCalled();
     expect(screen.getAllByText("Note failed.")).toHaveLength(2);

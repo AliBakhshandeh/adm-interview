@@ -1,6 +1,6 @@
 # Testing
 
-The repository includes unit, integration, E2E, and Storybook build coverage. Every workspace package now has a populated test entry; `pnpm test` runs 73 assertions across 11 test files before the six Playwright E2E journeys and Storybook build checks are used by `pnpm verify`.
+The repository includes unit, integration, E2E, and Storybook build coverage. Every workspace package now has a populated test entry; `pnpm test` runs 76 assertions across 11 test files before the six Playwright E2E journeys and Storybook build checks are used by `pnpm verify`.
 
 ## Commands
 
@@ -29,6 +29,10 @@ The platform tests cover:
 - duplicate registry behavior
 - attachment field plugin registration
 - incompatible plugin rejection
+- invalid validation-rule configuration
+- draft discard from the React UI
+- repeating child conditional, required, and remote option behavior
+- field notification isolation from form-shell notification
 - schema package smoke contract
 - telemetry redaction contract
 - testing harness smoke contract

@@ -209,6 +209,7 @@ export class FormEngine<TValues extends FormValues> {
   readonly graph: DependencyGraph;
   readonly plugins = new PluginRegistry();
   private readonly listeners = new Set<() => void>();
+  private readonly formListeners = new Set<() => void>();
   private readonly fieldListeners = new Map<string, Set<() => void>>();
   private readonly optionControllers = new Map<string, AbortController>();
   private readonly optionCache = new Map<string, { options: SelectOption[]; nextCursor?: string }>();
@@ -271,6 +272,11 @@ export class FormEngine<TValues extends FormValues> {
     return () => this.listeners.delete(listener);
   }
 
+  subscribeForm(listener: () => void): () => void {
+    this.formListeners.add(listener);
+    return () => this.formListeners.delete(listener);
+  }
+
   subscribeField(fieldId: string, listener: () => void): () => void {
     const listeners = this.fieldListeners.get(fieldId) ?? new Set();
     listeners.add(listener);
@@ -314,34 +320,36 @@ export class FormEngine<TValues extends FormValues> {
     this.setValue(fieldId, current as TValues[typeof fieldId]);
   }
 
-  async loadRemoteOptions(field: FieldDefinition<TValues>, query = "", cursor?: string): Promise<RemoteOptionsState> {
+  async loadRemoteOptions(field: FieldDefinition<TValues>, query = "", cursor?: string, overrides: { dependencyValues?: FormValues; storeKey?: string; notifyFieldId?: string } = {}): Promise<RemoteOptionsState> {
     if (!field.dataSource) return { status: "loaded", options: field.options ?? [] };
+    const storeKey = overrides.storeKey ?? field.id;
+    const notifyFieldId = overrides.notifyFieldId ?? field.id;
     const dataSource = this.options.dataSources?.[field.dataSource.resource];
     if (!dataSource) {
       const failed: RemoteOptionsState = { status: "failed", options: field.options ?? [], error: `Missing data source "${field.dataSource.resource}".` };
-      this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, failed);
+      this.state.remoteOptions = new Map(this.state.remoteOptions).set(storeKey, failed);
       this.emitPluginEvent("remote_options_failed", field.id);
-      this.notify(field.id);
+      this.notify(notifyFieldId);
       return failed;
     }
 
-    const dependencyValues = Object.fromEntries((field.dataSource.dependsOn ?? []).map((dependency) => [dependency, this.state.values[dependency]]));
+    const dependencyValues = overrides.dependencyValues ?? Object.fromEntries((field.dataSource.dependsOn ?? []).map((dependency) => [dependency, this.state.values[dependency]]));
     const cacheKey = JSON.stringify({ tenantId: this.options.context.tenantId, resource: field.dataSource.resource, query, cursor, dependencyValues });
     const cached = this.optionCache.get(cacheKey);
     if (cached) {
       const loaded: RemoteOptionsState = cached.options.length ? remoteLoaded(cached.options, cached.nextCursor) : { status: "empty", options: [] };
-      this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, loaded);
+      this.state.remoteOptions = new Map(this.state.remoteOptions).set(storeKey, loaded);
       this.emitPluginEvent("remote_options_loaded", field.id);
-      this.notify(field.id);
+      this.notify(notifyFieldId);
       return loaded;
     }
 
-    this.optionControllers.get(field.id)?.abort();
+    this.optionControllers.get(storeKey)?.abort();
     const controller = new AbortController();
-    this.optionControllers.set(field.id, controller);
-    const previous = this.state.remoteOptions.get(field.id)?.options ?? field.options ?? [];
-    this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, { status: "loading", options: previous });
-    this.notify(field.id);
+    this.optionControllers.set(storeKey, controller);
+    const previous = this.state.remoteOptions.get(storeKey)?.options ?? field.options ?? [];
+    this.state.remoteOptions = new Map(this.state.remoteOptions).set(storeKey, { status: "loading", options: previous });
+    this.notify(notifyFieldId);
 
     try {
       const optionQuery = { query, ...(cursor ? { cursor } : {}), dependencies: dependencyValues };
@@ -350,21 +358,21 @@ export class FormEngine<TValues extends FormValues> {
         formId: this.options.definition.id,
         formVersion: this.options.definition.version
       }, controller.signal);
-      if (controller.signal.aborted) return this.state.remoteOptions.get(field.id) ?? { status: "idle", options: [] };
+      if (controller.signal.aborted) return this.state.remoteOptions.get(storeKey) ?? { status: "idle", options: [] };
       const combined = cursor ? [...previous, ...page.items] : page.items;
       this.optionCache.set(cacheKey, { options: combined, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) });
       const loaded: RemoteOptionsState = combined.length ? remoteLoaded(combined, page.nextCursor) : { status: "empty", options: [] };
-      this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, loaded);
+      this.state.remoteOptions = new Map(this.state.remoteOptions).set(storeKey, loaded);
       this.emitPluginEvent("remote_options_loaded", field.id);
-      this.notify(field.id);
+      this.notify(notifyFieldId);
       return loaded;
     } catch (error) {
-      if (controller.signal.aborted) return this.state.remoteOptions.get(field.id) ?? { status: "idle", options: [] };
+      if (controller.signal.aborted) return this.state.remoteOptions.get(storeKey) ?? { status: "idle", options: [] };
       const failed: RemoteOptionsState = { status: "failed", options: previous, error: error instanceof Error ? error.message : "Failed to load options." };
-      this.state.remoteOptions = new Map(this.state.remoteOptions).set(field.id, failed);
+      this.state.remoteOptions = new Map(this.state.remoteOptions).set(storeKey, failed);
       this.telemetry.captureError(error, { ...this.eventAttributes(), fieldId: field.id, resource: field.dataSource.resource });
       this.emitPluginEvent("remote_options_failed", field.id);
-      this.notify(field.id);
+      this.notify(notifyFieldId);
       return failed;
     }
   }
@@ -526,6 +534,7 @@ export class FormEngine<TValues extends FormValues> {
     this.validationController?.abort();
     for (const controller of this.optionControllers.values()) controller.abort();
     this.listeners.clear();
+    this.formListeners.clear();
     this.fieldListeners.clear();
     this.plugins.cleanup();
     this.telemetry.track("form_closed", this.eventAttributes());
@@ -717,6 +726,7 @@ export class FormEngine<TValues extends FormValues> {
     this.state = { ...this.state };
     for (const listener of this.listeners) listener();
     if (!fieldId) {
+      for (const listener of this.formListeners) listener();
       for (const listeners of this.fieldListeners.values()) {
         for (const listener of listeners) listener();
       }

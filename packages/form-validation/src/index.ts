@@ -1,13 +1,13 @@
 import type { FieldDefinition, FormDefinition, FormError, FormPlatformContext, FormValues, SchemaValidationIssue, ValidationRule } from "@admiral/form-schema";
 import { text } from "@admiral/form-schema";
-import { flattenFields, validateDependencyGraph } from "@admiral/form-rules";
+import { collectConditionReferences, evaluateCondition, flattenFields, validateDependencyGraph } from "@admiral/form-rules";
 
-export type FieldRegistryEntry<TValue = unknown, TConfig = unknown> = {
+export type FieldRegistryEntry<TValue = unknown, TConfig = unknown, TRenderer = unknown> = {
   type: string;
   parse?: (input: unknown) => TValue;
   format?: (value: TValue) => unknown;
   validate?: ValidationRule[];
-  render?: unknown;
+  render?: TRenderer;
   config?: TConfig;
 };
 
@@ -56,6 +56,7 @@ export function validateFormDefinition<TValues extends FormValues>(
 
   const sectionIds = new Set<string>();
   const fieldIds = new Set<string>();
+  const topLevelFieldIds = new Set(definition.sections.flatMap((section) => section.fields.map((field) => field.id)));
   issues.push(...permissionIssues(definition.permission, "permission"));
   for (const section of definition.sections) {
     if (sectionIds.has(section.id)) issues.push({ code: "duplicate-section-id", message: `Duplicate section id "${section.id}".`, path: section.id });
@@ -64,26 +65,24 @@ export function validateFormDefinition<TValues extends FormValues>(
     for (const field of section.fields) {
       if (fieldIds.has(field.id)) issues.push({ code: "duplicate-field-id", message: `Duplicate field id "${field.id}".`, path: field.id });
       fieldIds.add(field.id);
-      if (!registry.has(field.type)) issues.push({ code: "unsupported-field-type", message: `Field "${field.id}" uses unsupported field type "${field.type}".`, path: field.id });
-      if (field.required && field.visibility) issues.push({ code: "required-hidden-risk", message: `Field "${field.id}" is statically required and conditionally visible; prefer requiredWhen.`, path: field.id });
-      issues.push(...permissionIssues(field.permission, `${field.id}.permission`));
-      if ((field.type === "select" || field.type === "multi-select" || field.type === "radio") && !field.options?.length && !field.dataSource) {
-        issues.push({ code: "missing-options", message: `Choice field "${field.id}" must define static options or a data source.`, path: field.id });
-      }
+      issues.push(...fieldDefinitionIssues(field, field.id, registry, topLevelFieldIds));
       if (field.type === "repeating-group" && "fields" in field) {
         if (field.fields.length === 0) issues.push({ code: "empty-repeating-group", message: `Repeating group "${field.id}" must define nested fields.`, path: field.id });
         if (field.minItems !== undefined && field.minItems < 0) issues.push({ code: "invalid-repeating-min", message: `Repeating group "${field.id}" minItems cannot be negative.`, path: field.id });
         if (field.maxItems !== undefined && field.maxItems < 1) issues.push({ code: "invalid-repeating-max", message: `Repeating group "${field.id}" maxItems must be at least 1.`, path: field.id });
         if (field.minItems !== undefined && field.maxItems !== undefined && field.minItems > field.maxItems) issues.push({ code: "invalid-repeating-range", message: `Repeating group "${field.id}" minItems cannot exceed maxItems.`, path: field.id });
         const childIds = new Set<string>();
+        const childFieldIds = new Set(field.fields.map((child) => child.id));
         for (const child of field.fields) {
           if (childIds.has(child.id)) issues.push({ code: "duplicate-repeating-field-id", message: `Repeating group "${field.id}" has duplicate child field "${child.id}".`, path: `${field.id}.${child.id}` });
           childIds.add(child.id);
-          if (!registry.has(child.type)) issues.push({ code: "unsupported-repeating-field-type", message: `Repeating group "${field.id}" child "${child.id}" uses unsupported field type "${child.type}".`, path: `${field.id}.${child.id}` });
-          issues.push(...permissionIssues(child.permission, `${field.id}.${child.id}.permission`));
+          issues.push(...fieldDefinitionIssues(child, `${field.id}.${child.id}`, registry, childFieldIds, true));
         }
       }
     }
+  }
+  for (const [index, rule] of (definition.formValidation ?? []).entries()) {
+    issues.push(...validationRuleIssues(rule, `formValidation[${index}]`, topLevelFieldIds));
   }
   for (const step of definition.steps ?? []) {
     for (const sectionId of step.sectionIds) {
@@ -91,6 +90,70 @@ export function validateFormDefinition<TValues extends FormValues>(
     }
   }
   return [...issues, ...validateDependencyGraph(definition)];
+}
+
+function fieldDefinitionIssues<TValues extends FormValues>(field: FieldDefinition<TValues>, path: string, registry: FieldRegistry, knownFieldIds: Set<string>, repeatingChild = false): SchemaValidationIssue[] {
+  const issues: SchemaValidationIssue[] = [];
+  if (!registry.has(field.type)) issues.push({ code: repeatingChild ? "unsupported-repeating-field-type" : "unsupported-field-type", message: `Field "${field.id}" uses unsupported field type "${field.type}".`, path });
+  if (field.required && field.visibility) issues.push({ code: "required-hidden-risk", message: `Field "${field.id}" is statically required and conditionally visible; prefer requiredWhen.`, path });
+  issues.push(...permissionIssues(field.permission, `${path}.permission`));
+  if ((field.type === "select" || field.type === "multi-select" || field.type === "radio") && !field.options?.length && !field.dataSource) {
+    issues.push({ code: "missing-options", message: `Choice field "${field.id}" must define static options or a data source.`, path });
+  }
+  for (const ref of [
+    ...collectConditionReferences(field.visibility),
+    ...collectConditionReferences(field.enabledWhen),
+    ...collectConditionReferences(field.readOnlyWhen),
+    ...collectConditionReferences(field.requiredWhen),
+    ...(field.dataSource?.dependsOn ?? [])
+  ]) {
+    if (!knownFieldIds.has(ref)) issues.push({ code: repeatingChild ? "unknown-repeating-field-reference" : "unknown-field-reference", message: `Field "${field.id}" references unknown field "${ref}".`, path });
+  }
+  for (const [index, rule] of (field.validation ?? []).entries()) {
+    issues.push(...validationRuleIssues(rule, `${path}.validation[${index}]`, knownFieldIds));
+  }
+  return issues;
+}
+
+function validationRuleIssues<TValues extends FormValues>(rule: ValidationRule<TValues>, path: string, knownFieldIds: Set<string>): SchemaValidationIssue[] {
+  const issues: SchemaValidationIssue[] = [];
+  if (rule.debounceMs !== undefined && (!Number.isFinite(rule.debounceMs) || rule.debounceMs < 0)) issues.push({ code: "invalid-validation-debounce", message: "Validation debounceMs must be a non-negative number.", path });
+  if (rule.retry !== undefined && (!Number.isInteger(rule.retry) || rule.retry < 0)) issues.push({ code: "invalid-validation-retry", message: "Validation retry must be a non-negative integer.", path });
+  switch (rule.type) {
+    case "required":
+      break;
+    case "minLength":
+    case "maxLength":
+      if (!Number.isInteger(rule.value) || Number(rule.value) < 0) issues.push({ code: "invalid-validation-value", message: `Validation "${rule.type}" requires a non-negative integer value.`, path });
+      break;
+    case "min":
+    case "max":
+      if (typeof rule.value !== "number" || !Number.isFinite(rule.value)) issues.push({ code: "invalid-validation-value", message: `Validation "${rule.type}" requires a finite numeric value.`, path });
+      break;
+    case "pattern":
+      if (typeof rule.value !== "string") {
+        issues.push({ code: "invalid-validation-value", message: "Pattern validation requires a string pattern.", path });
+      } else {
+        try {
+          new RegExp(rule.value);
+        } catch {
+          issues.push({ code: "invalid-validation-pattern", message: "Pattern validation contains an invalid regular expression.", path });
+        }
+      }
+      break;
+    case "notEqual":
+    case "after":
+      if (!rule.field || !knownFieldIds.has(String(rule.field))) issues.push({ code: "invalid-validation-field", message: `Validation "${rule.type}" requires an existing comparison field.`, path });
+      break;
+    case "custom":
+    case "async":
+      if (!rule.validate) issues.push({ code: "missing-validation-function", message: `Validation "${rule.type}" requires a validate function.`, path });
+      break;
+    default:
+      if (!rule.validate) issues.push({ code: "unknown-validation-type", message: `Validation "${rule.type}" must provide a validate function.`, path });
+      break;
+  }
+  return issues;
 }
 
 export async function validateValues<TValues extends FormValues>(params: {
@@ -109,7 +172,7 @@ export async function validateValues<TValues extends FormValues>(params: {
     if (!params.visible.has(field.id)) continue;
     const value = params.values[field.id];
     if (field.type === "repeating-group" && "fields" in field) {
-      errors.push(...await validateRepeatingField(field, value, params));
+      errors.push(...await validateRepeatingField(field as FieldDefinition<FormValues>, value, params));
       continue;
     }
     errors.push(...await validateFieldValue(field, value, params.values, params.context, field.required || params.required.has(field.id), params.signal, params.cache));
@@ -130,8 +193,8 @@ function topLevelFields<TValues extends FormValues>(definition: FormDefinition<T
   return definition.sections.flatMap((section) => section.fields);
 }
 
-async function validateRepeatingField<TValues extends FormValues>(field: FieldDefinition<TValues>, value: unknown, params: {
-  values: TValues;
+async function validateRepeatingField(field: FieldDefinition<FormValues>, value: unknown, params: {
+  values: FormValues;
   context: FormPlatformContext;
   required: Set<string>;
   cache?: Map<string, boolean>;
@@ -152,7 +215,14 @@ async function validateRepeatingField<TValues extends FormValues>(field: FieldDe
   for (const [index, item] of items.entries()) {
     const itemValues = item as FormValues;
     for (const child of field.fields) {
-      const childErrors = await validateFieldValue(child, item[child.id], itemValues, params.context, Boolean(child.required), params.signal, params.cache);
+      if (child.visibility && !evaluateCondition(child.visibility, itemValues)) continue;
+      const required = Boolean(child.required || (child.requiredWhen && evaluateCondition(child.requiredWhen, itemValues)));
+      if (child.type === "repeating-group" && "fields" in child) {
+        const childErrors = await validateRepeatingField(child, item[child.id], params);
+        errors.push(...childErrors.map((error) => ({ ...error, fieldId: repeatingPath(field.id, index, error.fieldId ?? child.id) })));
+        continue;
+      }
+      const childErrors = await validateFieldValue(child, item[child.id], itemValues, params.context, required, params.signal, params.cache);
       errors.push(...childErrors.map((error) => ({ ...error, fieldId: repeatingPath(field.id, index, child.id) })));
     }
   }

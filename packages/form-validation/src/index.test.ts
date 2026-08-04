@@ -78,6 +78,39 @@ describe("form-validation", () => {
     expect(validateFormDefinition(definition).map((issue) => issue.code)).toEqual(expect.arrayContaining(["invalid-permission-value", "invalid-repeating-range"]));
   });
 
+  it("reports invalid validation rule configuration before runtime", () => {
+    const definition = {
+      id: "invalid-validation",
+      version: 1,
+      title: "Invalid validation",
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "reference",
+        type: "text",
+        label: "Reference",
+        validation: [
+          { type: "pattern", value: "[", message: "Invalid pattern." },
+          { type: "min", value: "1", message: "Invalid min." },
+          { type: "after", message: "Missing comparison." },
+          { type: "custom-check", message: "Missing function." }
+        ]
+      }, {
+        id: "contacts",
+        type: "repeating-group",
+        label: "Contacts",
+        fields: [{ id: "name", type: "text", label: "Name", requiredWhen: { field: "missing", operator: "equals", value: "yes" } }]
+      }] }],
+      formValidation: [{ type: "async", message: "Missing validate." }]
+    } as unknown as FormDefinition<{ reference: string; contacts: unknown[] }>;
+    expect(validateFormDefinition(definition).map((issue) => issue.code)).toEqual(expect.arrayContaining([
+      "invalid-validation-pattern",
+      "invalid-validation-value",
+      "invalid-validation-field",
+      "unknown-validation-type",
+      "unknown-repeating-field-reference",
+      "missing-validation-function"
+    ]));
+  });
+
   it("validates repeating cardinality and nested child paths", async () => {
     const definition: FormDefinition<{ contacts: Array<{ id: string; name: string; relation: string }> }> = {
       id: "repeating-values",

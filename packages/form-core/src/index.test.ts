@@ -101,6 +101,33 @@ describe("form-core", () => {
     expect(engine.state.pendingAsyncValidations.size).toBe(0);
   });
 
+  it("separates field notifications from form-shell notifications", async () => {
+    const definition: FormDefinition<{ reference: string; status: string }> = {
+      id: "notification-isolation",
+      version: 1,
+      title: "Notification isolation",
+      sections: [{ id: "main", title: "Main", fields: [
+        { id: "reference", type: "text", label: "Reference" },
+        { id: "status", type: "text", label: "Status" }
+      ] }]
+    };
+    const engine = new FormEngine({ definition, initialValues: { reference: "", status: "" }, context });
+    const formShell = vi.fn();
+    const referenceField = vi.fn();
+    const statusField = vi.fn();
+    engine.subscribeForm(formShell);
+    engine.subscribeField("reference", referenceField);
+    engine.subscribeField("status", statusField);
+
+    engine.setValue("reference", "REF-1");
+
+    expect(formShell).not.toHaveBeenCalled();
+    expect(referenceField).toHaveBeenCalledTimes(1);
+    expect(statusField).not.toHaveBeenCalled();
+    await engine.validate();
+    expect(formShell).toHaveBeenCalled();
+  });
+
   it("normalizes draft restore and discard failures", async () => {
     const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
     const adapter = {

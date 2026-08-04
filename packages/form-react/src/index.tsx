@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { FieldDefinition, FormDefinition, FormPlatformContext, FormValues, LocalizedText, OptionDataSource, SelectOption } from "@admiral/form-schema";
 import { text } from "@admiral/form-schema";
-import { FormEngine, type DraftAdapter, type FormEngineOptions, type FormPlugin } from "@admiral/form-core";
+import { canEdit, canView, FormEngine, type DraftAdapter, type FormEngineOptions, type FormPlugin } from "@admiral/form-core";
 import { Button, Checkbox, DraftIndicator, ErrorSummary, FieldShell, FileDrop, RadioGroup, Select, Stepper, TextArea, TextInput } from "@admiral/form-ui";
-import { flattenFields } from "@admiral/form-rules";
+import { evaluateCondition, flattenFields } from "@admiral/form-rules";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
 
 export type FormRendererProps<TValues extends FormValues> = {
@@ -19,21 +19,23 @@ export type FormRendererProps<TValues extends FormValues> = {
   showDebug?: boolean;
 };
 
-export type FieldRendererContext<TValues extends FormValues = FormValues> = {
-  field: FieldDefinition<TValues>;
+type FieldValue<TValues extends FormValues, TField extends FieldDefinition<TValues>> = TField["id"] extends keyof TValues ? TValues[TField["id"]] : unknown;
+
+export type FieldRendererContext<TValues extends FormValues = FormValues, TField extends FieldDefinition<TValues> = FieldDefinition<TValues>> = {
+  field: TField;
   engine: FormEngine<TValues>;
   state: FormEngine<TValues>["state"];
-  value: unknown;
+  value: FieldValue<TValues, TField>;
   locale: FormPlatformContext["locale"];
   disabled: boolean;
   required: boolean;
   errors: string[];
   warnings: string[];
   describedBy?: string;
-  setValue: (value: unknown) => void;
+  setValue: (value: FieldValue<TValues, TField>) => void;
 };
 
-export type CustomFieldRenderer<TValues extends FormValues = FormValues> = (context: FieldRendererContext<TValues>) => React.ReactNode;
+export type CustomFieldRenderer<TValues extends FormValues = FormValues, TField extends FieldDefinition<TValues> = FieldDefinition<TValues>> = (context: FieldRendererContext<TValues, TField>) => React.ReactNode;
 
 const FormContext = createContext<FormEngine<FormValues> | null>(null);
 
@@ -46,6 +48,11 @@ export function useFormEngine<TValues extends FormValues>(): FormEngine<TValues>
 export function useFormSnapshot<TValues extends FormValues>(): FormEngine<TValues>["state"] {
   const engine = useFormEngine<TValues>();
   return useSyncExternalStore(engine.subscribe.bind(engine), () => engine.state, () => engine.state);
+}
+
+function useFormMetaSnapshot<TValues extends FormValues>(): FormEngine<TValues>["state"] {
+  const engine = useFormEngine<TValues>();
+  return useSyncExternalStore(engine.subscribeForm.bind(engine), () => engine.state, () => engine.state);
 }
 
 export function useFieldSnapshot<TValues extends FormValues>(fieldId: keyof TValues & string): FormEngine<TValues>["state"] {
@@ -94,7 +101,7 @@ function contextIdentity(context: FormPlatformContext): string {
 function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: { definition: FormDefinition<TValues>; showDebug: boolean }): JSX.Element {
   const renderStartedAt = performance.now();
   const engine = useFormEngine<TValues>();
-  const state = useFormSnapshot<TValues>();
+  const state = useFormMetaSnapshot<TValues>();
   const locale = engine["options"].context.locale;
   const copy = uiCopy[locale];
   const dir = locale === "fa" ? "rtl" : "ltr";
@@ -147,6 +154,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: {
       <footer className="af-actions">
         <Button type="button" disabled={state.currentStep === 0} onClick={() => void engine.goToStep(state.currentStep - 1)}>{copy.back}</Button>
         <Button type="button" onClick={() => void engine.saveDraft()}>{copy.saveDraft}</Button>
+        <Button type="button" tone="danger" disabled={state.draft.status === "idle"} onClick={() => void engine.discardDraft()}>{copy.discardDraft}</Button>
         {state.currentStep < steps.length - 1 ? <Button type="button" tone="primary" onClick={() => void engine.goToStep(state.currentStep + 1)}>{copy.next}</Button> : <Button type="submit" tone="primary">{copy.submit}</Button>}
       </footer>
       <SubmissionPanel fields={allFields} />
@@ -169,13 +177,13 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
   const required = state.requiredFields.has(field.id) || Boolean(field.required);
   const describedBy = describedByFor(field, state.pendingAsyncValidations.has(field.id), errors.length > 0);
   const common = { id: field.id, disabled, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
-  const customRenderer = engine.registry.get(field.type)?.render as CustomFieldRenderer<TValues> | undefined;
+  const customRenderer = engine.registry.get(field.type)?.render as CustomFieldRenderer<TValues, typeof field> | undefined;
   const attachmentConfig = field.type === "file" ? attachmentConfigFor(engine, field) : defaultAttachmentConfig;
   const customField = customRenderer?.({
     field,
     engine,
     state,
-    value,
+    value: value as FieldValue<TValues, typeof field>,
     locale,
     disabled,
     required,
@@ -301,12 +309,15 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
             {childFields.map((child) => {
               const path = repeatingPath(field.id, index, child.id);
               const errors = state.errors.filter((error) => error.fieldId === path && error.severity === "error").map((error) => error.message);
+              const runtime = repeatingChildRuntime(child, item, engine.options.context);
+              if (!runtime.visible) return null;
+              const childLabel = label(child.label, locale) || labels[child.id] || child.id;
               return (
-                <label className="af-repeat-field" key={child.id} htmlFor={path}>
-                  <span>{label(child.label, locale) || labels[child.id] || child.id}</span>
-                  {renderRepeatingControl({ child, engine, item, itemId: String(item.id), path, errors, locale, updateItem })}
+                <div className="af-repeat-field" key={child.id}>
+                  <label htmlFor={path}>{childLabel}{runtime.required ? <span aria-hidden="true"> *</span> : null}</label>
+                  <RepeatingControl parentFieldId={field.id} child={child} item={item} itemId={String(item.id)} path={path} errors={errors} locale={locale} disabled={runtime.disabled} required={runtime.required} updateItem={updateItem} />
                   {errors.length ? <em id={`${path}-error`} className="af-message af-message-error" role="alert">{errors[0]}</em> : null}
-                </label>
+                </div>
               );
             })}
           </div>
@@ -322,41 +333,80 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
   );
 }
 
-function renderRepeatingControl<TValues extends FormValues>({ child, engine, item, itemId, path, errors, locale, updateItem }: {
+function RepeatingControl<TValues extends FormValues>({ parentFieldId, child, item, itemId, path, errors, locale, disabled, required, updateItem }: {
+  parentFieldId: keyof TValues & string;
   child: FieldDefinition<FormValues>;
-  engine: FormEngine<TValues>;
   item: Record<string, unknown>;
   itemId: string;
   path: string;
   errors: string[];
   locale: FormPlatformContext["locale"];
+  disabled: boolean;
+  required: boolean;
   updateItem: (itemId: string, child: FieldDefinition<FormValues>, rawValue: unknown) => void;
-}): React.ReactNode {
+}): JSX.Element {
+  const engine = useFormEngine<TValues>();
+  const remoteOptions = useRepeatingRemoteOptions(parentFieldId, child, item, path);
   const value = item[child.id];
   const describedBy = errors.length ? `${path}-error` : undefined;
-  const common = { id: path, disabled: false, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
-  const customRenderer = engine.registry.get(child.type)?.render as CustomFieldRenderer<FormValues> | undefined;
+  const common = { id: path, disabled, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
+  const selectPlaceholder = remoteOptions.placeholder ? { placeholder: remoteOptions.placeholder } : {};
+  const customRenderer = engine.registry.get(child.type)?.render as CustomFieldRenderer<FormValues, typeof child> | undefined;
   if (customRenderer) {
-    return customRenderer({
+    return <>
+      {customRenderer({
       field: child,
       engine: engine as unknown as FormEngine<FormValues>,
       state: engine.state as FormEngine<FormValues>["state"],
       value,
       locale,
-      disabled: false,
-      required: Boolean(child.required),
+      disabled,
+      required,
       errors,
       warnings: [],
       ...(describedBy ? { describedBy } : {}),
       setValue: (next) => updateItem(itemId, child, next)
-    });
+      })}
+    </>;
   }
   if (child.type === "textarea") return <TextArea {...common} value={String(value ?? "")} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
   if (child.type === "checkbox") return <Checkbox {...common} checked={Boolean(value)} onChange={(event) => updateItem(itemId, child, event.currentTarget.checked)} />;
-  if (child.type === "select") return <Select {...common} value={String(value ?? "")} options={optionView(child.options ?? [], locale)} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
-  if (child.type === "multi-select") return <Select {...common} multiple value={Array.isArray(value) ? value.map(String) : []} options={optionView(child.options ?? [], locale)} onChange={(event) => updateItem(itemId, child, Array.from(event.currentTarget.selectedOptions).map((option) => option.value))} />;
-  if (child.type === "radio") return <RadioGroup id={path} name={label(child.label, locale)} inputName={path} value={String(value ?? "")} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} options={optionView(child.options ?? [], locale)} onChange={(next) => updateItem(itemId, child, next)} />;
+  if (child.type === "select") return <Select {...common} {...selectPlaceholder} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
+  if (child.type === "multi-select") return <Select {...common} {...selectPlaceholder} multiple value={Array.isArray(value) ? value.map(String) : []} options={optionView(remoteOptions.options, locale)} onChange={(event) => updateItem(itemId, child, Array.from(event.currentTarget.selectedOptions).map((option) => option.value))} />;
+  if (child.type === "radio") return <RadioGroup id={path} name={label(child.label, locale)} inputName={path} value={String(value ?? "")} disabled={disabled} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} options={optionView(remoteOptions.options, locale)} onChange={(next) => updateItem(itemId, child, next)} />;
   return <TextInput {...common} type={child.type === "number" || child.type === "currency" ? "number" : child.type === "date" ? "date" : "text"} value={String(value ?? "")} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
+}
+
+function useRepeatingRemoteOptions<TValues extends FormValues>(parentFieldId: keyof TValues & string, child: FieldDefinition<FormValues>, item: Record<string, unknown>, path: string): { options: SelectOption[]; placeholder?: string; nextCursor?: string } {
+  const engine = useFormEngine<TValues>();
+  const state = useFieldSnapshot<TValues>(parentFieldId);
+  const locale = engine.options.context.locale;
+  const copy = uiCopy[locale];
+  const dependencyValues = Object.fromEntries((child.dataSource?.dependsOn ?? []).map((dependency) => [dependency, item[dependency]]));
+  const dependencyKey = JSON.stringify(dependencyValues);
+
+  useEffect(() => {
+    if (!child.dataSource || (child.type !== "select" && child.type !== "multi-select" && child.type !== "radio")) return;
+    void engine.loadRemoteOptions(child as FieldDefinition<TValues>, "", undefined, { dependencyValues, storeKey: path, notifyFieldId: parentFieldId });
+  }, [engine, parentFieldId, child.id, path, dependencyKey]);
+
+  if (!child.dataSource) return { options: child.options ?? [] };
+  const remote = state.remoteOptions.get(path);
+  const options = remote?.options.length ? remote.options : child.options ?? [];
+  if (!remote || remote.status === "idle") return { options, placeholder: copy.selectPlaceholder };
+  if (remote.status === "loading") return { options, placeholder: copy.loadingOptions };
+  if (remote.status === "empty") return { options: [], placeholder: copy.emptyOptions };
+  if (remote.status === "failed") return { options, placeholder: copy.failedOptions };
+  const nextCursor = "nextCursor" in remote ? remote.nextCursor : undefined;
+  return { options, ...(nextCursor ? { nextCursor } : {}) };
+}
+
+function repeatingChildRuntime(child: FieldDefinition<FormValues>, item: Record<string, unknown>, context: FormPlatformContext): { visible: boolean; disabled: boolean; required: boolean } {
+  const itemValues = item as FormValues;
+  const visible = canView(child.permission?.view, context) && (!child.visibility || evaluateCondition(child.visibility, itemValues));
+  const disabled = !canEdit(child, context) || Boolean(child.enabledWhen && !evaluateCondition(child.enabledWhen, itemValues)) || Boolean(child.readOnlyWhen && evaluateCondition(child.readOnlyWhen, itemValues));
+  const required = Boolean(child.required || (child.requiredWhen && evaluateCondition(child.requiredWhen, itemValues)));
+  return { visible, disabled, required };
 }
 
 function describedByFor<TValues extends FormValues>(field: FieldDefinition<TValues>, pending: boolean, hasError: boolean): string | undefined {
@@ -535,6 +585,7 @@ const uiCopy = {
     next: "Next",
     submit: "Submit",
     saveDraft: "Save draft",
+    discardDraft: "Discard draft",
     draft: "Draft",
     formSteps: "Form steps",
     reviewRequired: "Review required",
@@ -608,6 +659,7 @@ const uiCopy = {
     next: "بعدی",
     submit: "ارسال",
     saveDraft: "ذخیره پیش‌نویس",
+    discardDraft: "حذف پیش‌نویس",
     draft: "پیش‌نویس",
     formSteps: "مراحل فرم",
     reviewRequired: "نیاز به بازبینی",

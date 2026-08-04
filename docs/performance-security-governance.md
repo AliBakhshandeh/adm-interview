@@ -13,6 +13,7 @@ Target budget:
 ## Implemented Performance Strategies
 
 - field-level subscriptions
+- separate form-shell subscriptions for validation, draft, step, and submission state
 - affected-field discovery through dependency graph
 - deterministic rule evaluation
 - calculated dependency recalculation
@@ -23,11 +24,11 @@ Target budget:
 - memoized engine creation
 - telemetry measurement points
 
-The test suite includes a large-form scenario with 150 fields, 20 sections, and 50 conditional rules.
+The test suite includes a large-form scenario with 150 fields, 20 sections, and 50 conditional rules, plus a notification-isolation regression that proves a single field change does not notify unrelated field subscribers or the React form shell.
 
 ## Complexity Notes
 
-Schema validation and graph construction run when the engine is created. Runtime field changes use graph edges to discover affected fields. This keeps interactions proportional to affected dependencies rather than total form size where possible.
+Schema validation and graph construction run when the engine is created. Runtime field changes use graph edges to discover affected fields and notify only changed or affected field subscribers. The React adapter subscribes the form shell separately for form-level state, keeping ordinary field input from forcing a full shell render.
 
 ## Security Considerations
 
