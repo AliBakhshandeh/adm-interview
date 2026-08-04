@@ -73,7 +73,13 @@ export class LocalStorageDraftAdapter implements DraftAdapter {
 
   async load<TValues extends FormValues>(key: string): Promise<DraftRecord<TValues> | undefined> {
     const raw = this.storage.getItem(key);
-    return raw ? (JSON.parse(raw) as DraftRecord<TValues>) : undefined;
+    if (!raw) return undefined;
+    try {
+      return JSON.parse(raw) as DraftRecord<TValues>;
+    } catch (error) {
+      this.storage.removeItem(key);
+      throw error;
+    }
   }
 
   async save<TValues extends FormValues>(key: string, record: DraftRecord<TValues>): Promise<void> {
@@ -132,8 +138,9 @@ export type FormPlugin = {
 const PLATFORM_VERSION = "0.1.0";
 
 export class PluginRegistry {
-  private contributions: FormPluginContribution[] = [];
+  private contributions: Array<{ pluginId: string; contribution: FormPluginContribution }> = [];
   private ids = new Set<string>();
+  private telemetry: FormPlatformTelemetry = noopTelemetry;
 
   register(plugin: FormPlugin, context: FormPluginContext): void {
     if (this.ids.has(plugin.id)) throw new Error(`Plugin "${plugin.id}" is already registered.`);
@@ -147,7 +154,8 @@ export class PluginRegistry {
       throw new Error(`Plugin "${plugin.id}" requires platform version ${plugin.minPlatformVersion} or newer.`);
     }
     try {
-      this.contributions.push(plugin.setup(context));
+      this.telemetry = context.telemetry;
+      this.contributions.push({ pluginId: plugin.id, contribution: plugin.setup(context) });
       this.ids.add(plugin.id);
     } catch (error) {
       context.telemetry.track("plugin_failed", { pluginId: plugin.id });
@@ -156,15 +164,29 @@ export class PluginRegistry {
   }
 
   emit(event: FormAuditEvent): void {
-    for (const contribution of this.contributions) contribution.onEvent?.(event);
+    for (const { pluginId, contribution } of this.contributions) {
+      try {
+        contribution.onEvent?.(event);
+      } catch (error) {
+        this.telemetry.track("plugin_failed", { pluginId, event: event.event });
+        this.telemetry.captureError(error, { pluginId, event: event.event });
+      }
+    }
   }
 
   get draftAdapter(): DraftAdapter | undefined {
-    return this.contributions.find((contribution) => contribution.draftAdapter)?.draftAdapter;
+    return this.contributions.find(({ contribution }) => contribution.draftAdapter)?.contribution.draftAdapter;
   }
 
   cleanup(): void {
-    for (const contribution of this.contributions) contribution.cleanup?.();
+    for (const { pluginId, contribution } of this.contributions) {
+      try {
+        contribution.cleanup?.();
+      } catch (error) {
+        this.telemetry.track("plugin_failed", { pluginId, event: "cleanup" });
+        this.telemetry.captureError(error, { pluginId, event: "cleanup" });
+      }
+    }
   }
 }
 
@@ -259,6 +281,7 @@ export class FormEngine<TValues extends FormValues> {
   setValue(fieldId: keyof TValues & string, value: TValues[typeof fieldId]): void {
     if (!this.state.enabledFields.has(fieldId) || this.state.readOnlyFields.has(fieldId)) return;
     const startedAt = performance.now();
+    this.invalidateValidation(fieldId);
     this.state.values = { ...this.state.values, [fieldId]: value };
     this.state.dirtyFields.add(fieldId);
     this.state.touchedFields.add(fieldId);
@@ -437,20 +460,29 @@ export class FormEngine<TValues extends FormValues> {
   }
 
   async restoreDraft(): Promise<boolean> {
-    const loaded = await this.loadDraftCandidate();
-    if (!loaded) return false;
-    if (new Date(loaded.record.expiresAt).getTime() < Date.now()) {
-      this.state.draft = { status: "expired", key: loaded.key };
+    try {
+      const loaded = await this.loadDraftCandidate();
+      if (!loaded) return false;
+      if (new Date(loaded.record.expiresAt).getTime() < Date.now()) {
+        this.state.draft = { status: "expired", key: loaded.key };
+        return false;
+      }
+      const migrated = migrateDraft(this.options.definition, loaded.record.values, loaded.record.formVersion);
+      this.state.values = migrated as TValues;
+      this.recalculate();
+      this.state.draft = { status: "restored", key: loaded.key, restoredAt: new Date().toISOString() };
+      this.telemetry.track("draft_restored", this.eventAttributes());
+      this.emitPluginEvent("draft_restored");
+      this.notify();
+      return true;
+    } catch (error) {
+      this.state.draft = { status: "failed", key: this.state.draft.key, error: error instanceof Error ? error.message : "Draft restore failed" };
+      this.telemetry.captureError(error, this.eventAttributes());
+      this.telemetry.track("draft_restore_failed", this.eventAttributes());
+      this.emitPluginEvent("draft_restore_failed");
+      this.notify();
       return false;
     }
-    const migrated = migrateDraft(this.options.definition, loaded.record.values, loaded.record.formVersion);
-    this.state.values = migrated as TValues;
-    this.recalculate();
-    this.state.draft = { status: "restored", key: loaded.key, restoredAt: new Date().toISOString() };
-    this.telemetry.track("draft_restored", this.eventAttributes());
-    this.emitPluginEvent("draft_restored");
-    this.notify();
-    return true;
   }
 
   async saveDraft(): Promise<void> {
@@ -474,11 +506,29 @@ export class FormEngine<TValues extends FormValues> {
   }
 
   async discardDraft(): Promise<void> {
-    await this.draftAdapter.discard(this.state.draft.key);
-    this.state.draft = { status: "idle", key: this.state.draft.key };
-    this.telemetry.track("draft_discarded", this.eventAttributes());
-    this.emitPluginEvent("draft_discarded");
+    const key = this.state.draft.key;
+    try {
+      await this.draftAdapter.discard(key);
+      this.state.draft = { status: "idle", key };
+      this.telemetry.track("draft_discarded", this.eventAttributes());
+      this.emitPluginEvent("draft_discarded");
+    } catch (error) {
+      this.state.draft = { status: "failed", key, error: error instanceof Error ? error.message : "Draft discard failed" };
+      this.telemetry.captureError(error, this.eventAttributes());
+      this.telemetry.track("draft_discard_failed", this.eventAttributes());
+      this.emitPluginEvent("draft_discard_failed");
+    }
     this.notify();
+  }
+
+  destroy(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.validationController?.abort();
+    for (const controller of this.optionControllers.values()) controller.abort();
+    this.listeners.clear();
+    this.fieldListeners.clear();
+    this.plugins.cleanup();
+    this.telemetry.track("form_closed", this.eventAttributes());
   }
 
   reviewConflict(): void {
@@ -603,10 +653,17 @@ export class FormEngine<TValues extends FormValues> {
   }
 
   private async loadDraftCandidate(): Promise<LoadedDraft<TValues> | undefined> {
+    let lastError: unknown;
     for (const key of this.draftCandidateKeys()) {
-      const record = await this.draftAdapter.load<TValues>(key);
-      if (record) return { key, record };
+      try {
+        const record = await this.draftAdapter.load<TValues>(key);
+        if (record) return { key, record };
+      } catch (error) {
+        lastError = error;
+        this.telemetry.captureError(error, { ...this.eventAttributes(), draftKey: key });
+      }
     }
+    if (lastError) throw lastError;
     return undefined;
   }
 
@@ -646,14 +703,28 @@ export class FormEngine<TValues extends FormValues> {
     this.saveTimer = setTimeout(() => void this.saveDraft(), 450);
   }
 
+  private invalidateValidation(fieldId: string): void {
+    this.validationRunId += 1;
+    this.validationController?.abort();
+    this.validationController = undefined;
+    this.state.pendingAsyncValidations = new Set();
+    this.validationCache.clear();
+    this.state.errors = this.state.errors.filter((error) => error.fieldId !== fieldId);
+    if (this.state.submission.status === "validating" || this.state.submission.status === "validation-failed") this.state.submission = { status: "idle" };
+  }
+
   private notify(fieldId?: string): void {
     this.state = { ...this.state };
     for (const listener of this.listeners) listener();
-    if (fieldId) {
-      for (const listener of this.fieldListeners.get(fieldId) ?? []) listener();
-      for (const affected of affectedFields(this.graph, fieldId)) {
-        for (const listener of this.fieldListeners.get(affected) ?? []) listener();
+    if (!fieldId) {
+      for (const listeners of this.fieldListeners.values()) {
+        for (const listener of listeners) listener();
       }
+      return;
+    }
+    for (const listener of this.fieldListeners.get(fieldId) ?? []) listener();
+    for (const affected of affectedFields(this.graph, fieldId)) {
+      for (const listener of this.fieldListeners.get(affected) ?? []) listener();
     }
   }
 

@@ -53,7 +53,10 @@ export function useFieldSnapshot<TValues extends FormValues>(fieldId: keyof TVal
 }
 
 export function FormRenderer<TValues extends FormValues>(props: FormRendererProps<TValues>): JSX.Element {
-  const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition.id, props.definition.version, props.context.tenantId, props.context.userId]);
+  const contextSignature = contextIdentity(props.context);
+  const initialValuesSignature = JSON.stringify(props.initialValues);
+  const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition, props.registry, props.draftAdapter, props.plugins, props.dataSources, props.stateOverrides, contextSignature, initialValuesSignature]);
+  useEffect(() => () => engine.destroy(), [engine]);
   return (
     <FormContext.Provider value={engine as FormEngine<FormValues>}>
       <EnterpriseForm definition={props.definition} showDebug={Boolean(props.showDebug)} />
@@ -72,6 +75,18 @@ function compactEngineOptions<TValues extends FormValues>(props: FormRendererPro
     ...(props.dataSources ? { dataSources: props.dataSources } : {}),
     ...(props.stateOverrides ? { stateOverrides: props.stateOverrides } : {})
   };
+}
+
+function contextIdentity(context: FormPlatformContext): string {
+  return JSON.stringify({
+    tenantId: context.tenantId,
+    userId: context.userId,
+    locale: context.locale,
+    timezone: context.timezone,
+    entityId: context.entityId,
+    correlationId: context.correlationId,
+    permissions: [...context.permissions].sort()
+  });
 }
 
 function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: { definition: FormDefinition<TValues>; showDebug: boolean }): JSX.Element {
@@ -118,7 +133,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: {
               {section.description ? <p>{label(section.description, locale)}</p> : null}
             </div>
             <div className="af-grid">
-              {section.fields.map((field) => <FieldRenderer key={field.id} field={field} />)}
+              {section.fields.map((field) => <MemoFieldRenderer key={field.id} field={field} />)}
             </div>
           </section>
         ))}
@@ -214,6 +229,8 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
     </FieldShell>
   );
 }
+
+const MemoFieldRenderer = React.memo(FieldRenderer) as typeof FieldRenderer;
 
 function RemoteSelectField<TValues extends FormValues>({ field, common, value, remoteOptions }: { field: FieldDefinition<TValues>; common: { id: string; disabled: boolean; "aria-invalid": boolean }; value: string; remoteOptions: { options: SelectOption[]; placeholder?: string; nextCursor?: string } }): JSX.Element {
   const engine = useFormEngine<TValues>();

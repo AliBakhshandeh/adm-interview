@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { createDefaultFieldRegistry } from "@admiral/form-validation";
 import { MemoryDraftAdapter } from "@admiral/form-core";
@@ -28,5 +28,43 @@ describe("form-react", () => {
     expect(input).toHaveAttribute("accept", "application/pdf");
     fireEvent.change(input, { target: { files: [new File(["text"], "notes.txt", { type: "text/plain" })] } });
     expect(await screen.findByText("Unsupported file type")).toBeInTheDocument();
+  });
+
+  it("refreshes same-tenant permission context on grant and revoke", () => {
+    const definition: FormDefinition<{ discount: number }> = {
+      id: "permissions",
+      version: 1,
+      title: "Permissions",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "discount", type: "number", label: "Discount", permission: { edit: "discount.edit" } }] }]
+    };
+    const view = render(<FormRenderer definition={definition} initialValues={{ discount: 0 }} context={context} draftAdapter={new MemoryDraftAdapter()} />);
+    expect(screen.getByLabelText("Discount")).toBeDisabled();
+    view.rerender(<FormRenderer definition={definition} initialValues={{ discount: 0 }} context={{ ...context, permissions: ["discount.edit"] }} draftAdapter={new MemoryDraftAdapter()} />);
+    expect(screen.getByLabelText("Discount")).toBeEnabled();
+    view.rerender(<FormRenderer definition={definition} initialValues={{ discount: 0 }} context={context} draftAdapter={new MemoryDraftAdapter()} />);
+    expect(screen.getByLabelText("Discount")).toBeDisabled();
+  });
+
+  it("keeps unrelated custom field renderers isolated", () => {
+    const registry = createDefaultFieldRegistry();
+    const renderA = vi.fn(({ setValue }) => <button type="button" onClick={() => setValue("changed")}>Change A</button>);
+    const renderB = vi.fn(() => <span>Stable B</span>);
+    registry.register({ type: "custom-a", render: renderA });
+    registry.register({ type: "custom-b", render: renderB });
+    const definition = {
+      id: "isolation",
+      version: 1,
+      title: "Isolation",
+      sections: [{ id: "main", title: "Main", fields: [
+        { id: "a", type: "custom-a", custom: true, label: "A" },
+        { id: "b", type: "custom-b", custom: true, label: "B" }
+      ] }]
+    } as unknown as FormDefinition<{ a: string; b: string }>;
+    render(<FormRenderer definition={definition} initialValues={{ a: "", b: "" }} context={context} registry={registry} draftAdapter={new MemoryDraftAdapter()} />);
+    expect(renderA).toHaveBeenCalledTimes(1);
+    expect(renderB).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Change A" }));
+    expect(renderA).toHaveBeenCalledTimes(2);
+    expect(renderB).toHaveBeenCalledTimes(1);
   });
 });

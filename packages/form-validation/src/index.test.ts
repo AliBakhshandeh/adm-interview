@@ -42,4 +42,39 @@ describe("form-validation", () => {
     expect(errors).toHaveLength(1);
     expect(errors[0]?.source).toBe("business");
   });
+
+  it("does not run field validation rules for empty optional values", async () => {
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "empty-optional",
+      version: 1,
+      title: "Empty optional",
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "reference",
+        type: "text",
+        label: "Reference",
+        validation: [{ type: "pattern", value: "^REF-", message: "Reference must start with REF." }]
+      }] }]
+    };
+    const errors = await validateValues({ definition, values: { reference: "" }, context, visible: new Set(["reference"]), required: new Set() });
+    expect(errors).toEqual([]);
+  });
+
+  it("reports invalid permission and repeating configuration", () => {
+    const definition = {
+      id: "invalid-config",
+      version: 1,
+      title: "Invalid config",
+      permission: { view: "" },
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "items",
+        type: "repeating-group",
+        label: "Items",
+        minItems: 3,
+        maxItems: 1,
+        permission: { edit: "" },
+        fields: [{ id: "name", type: "text", label: "Name", permission: { action: "" } }]
+      }] }]
+    } as unknown as FormDefinition<{ items: unknown[] }>;
+    expect(validateFormDefinition(definition).map((issue) => issue.code)).toEqual(expect.arrayContaining(["invalid-permission-value", "invalid-repeating-range"]));
+  });
 });

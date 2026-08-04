@@ -50,4 +50,76 @@ describe("form-core", () => {
     expect(telemetry.track).toHaveBeenCalledWith("plugin_failed", { pluginId: "bad-plugin" });
     expect(telemetry.captureError).toHaveBeenCalled();
   });
+
+  it("isolates runtime plugin hook and cleanup failures", () => {
+    const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const observed: string[] = [];
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "plugin-runtime",
+      version: 1,
+      title: "Plugin runtime",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "reference", type: "text", label: "Reference" }] }]
+    };
+    const engine = new FormEngine({
+      definition,
+      initialValues: { reference: "" },
+      context,
+      telemetry,
+      plugins: [
+        { id: "throwing", version: "1.0.0", setup: () => ({ onEvent: () => { throw new Error("event failed"); }, cleanup: () => { throw new Error("cleanup failed"); } }) },
+        { id: "observer", version: "1.0.0", setup: () => ({ onEvent: (event) => observed.push(event.event), cleanup: () => observed.push("cleanup") }) }
+      ]
+    });
+    expect(() => engine.setValue("reference", "REF-2")).not.toThrow();
+    expect(observed).toContain("field_changed");
+    expect(() => engine.destroy()).not.toThrow();
+    expect(observed).toContain("cleanup");
+    expect(telemetry.track).toHaveBeenCalledWith("plugin_failed", { pluginId: "throwing", event: "field_changed" });
+    expect(telemetry.track).toHaveBeenCalledWith("plugin_failed", { pluginId: "throwing", event: "cleanup" });
+  });
+
+  it("does not apply stale async validation after a value changes", async () => {
+    let resolveValidation: ((result: boolean) => void) | undefined;
+    const definition: FormDefinition<{ code: string }> = {
+      id: "async-ownership",
+      version: 1,
+      title: "Async ownership",
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "code",
+        type: "text",
+        label: "Code",
+        validation: [{ type: "async", message: "Old code failed.", validate: () => new Promise<boolean>((resolve) => { resolveValidation = resolve; }) }]
+      }] }]
+    };
+    const engine = new FormEngine({ definition, initialValues: { code: "old" }, context });
+    const validation = engine.validate();
+    engine.setValue("code", "new");
+    resolveValidation?.(false);
+    await validation;
+    expect(engine.state.values.code).toBe("new");
+    expect(engine.state.errors).toEqual([]);
+    expect(engine.state.pendingAsyncValidations.size).toBe(0);
+  });
+
+  it("normalizes draft restore and discard failures", async () => {
+    const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const adapter = {
+      load: vi.fn(async () => { throw new Error("bad json"); }),
+      save: vi.fn(),
+      discard: vi.fn(async () => { throw new Error("cannot discard"); })
+    };
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "draft-failure",
+      version: 1,
+      title: "Draft failure",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "reference", type: "text", label: "Reference" }] }]
+    };
+    const engine = new FormEngine({ definition, initialValues: { reference: "" }, context, telemetry, draftAdapter: adapter });
+    await expect(engine.restoreDraft()).resolves.toBe(false);
+    expect(engine.state.draft.status).toBe("failed");
+    await expect(engine.discardDraft()).resolves.toBeUndefined();
+    expect(engine.state.draft.status).toBe("failed");
+    expect(telemetry.track).toHaveBeenCalledWith("draft_restore_failed", expect.any(Object));
+    expect(telemetry.track).toHaveBeenCalledWith("draft_discard_failed", expect.any(Object));
+  });
 });
