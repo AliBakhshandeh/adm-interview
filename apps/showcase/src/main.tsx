@@ -48,14 +48,14 @@ function App(): JSX.Element {
           <button className="round-action button-theme-sticky" aria-label={copy.theme} onClick={toggleTheme}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button>
         </aside>
 
-        <section className="workspace">
+        <main className="workspace">
           <header className="workspace-header">
             <div>
               <h1>{copy.dashboard}</h1>
               <p>{form === "booking" ? copy.bookingSubtitle : copy.onboardingSubtitle}</p>
             </div>
             <div className="top-actions">
-              <select className="context-select" value={tenant} onChange={(event) => setTenant(event.currentTarget.value)}>
+              <select className="context-select" aria-label="Tenant" value={tenant} onChange={(event) => setTenant(event.currentTarget.value)}>
                 <option value="tenant-a">{copy.tenantA}</option>
                 <option value="tenant-b">{copy.tenantB}</option>
               </select>
@@ -67,7 +67,7 @@ function App(): JSX.Element {
           </header>
 
           <div className="dashboard-grid">
-            <main className="dashboard-main">
+            <div className="dashboard-main">
               <section className="form-board">
                 <FormRenderer
                   key={`${definition.id}-${tenant}-${locale}`}
@@ -79,9 +79,9 @@ function App(): JSX.Element {
                   plugins={[attachmentPlugin(), auditTrailPlugin(auditEvents), formAnalyticsPlugin(1)]}
                 />
               </section>
-            </main>
+            </div>
           </div>
-        </section>
+        </main>
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react";
-import { FormRenderer, MemoryDraftAdapter, type FormDefinition, type FormEngineOptions, type FormPlatformContext, type FormValues, type OptionDataSource, type SelectOption } from "@admiral/form-platform";
+import { FormRenderer, MemoryDraftAdapter, type BuiltInFieldType, type FormDefinition, type FormEngineOptions, type FormPlatformContext, type FormValues, type OptionDataSource, type SelectOption } from "@admiral/form-platform";
 import { bookingInitialValues, employeeInitialValues, employeeOnboardingForm, shipmentBookingForm } from "./forms";
 
 const context: FormPlatformContext = {
@@ -31,7 +31,7 @@ function renderForm<TValues extends FormValues>(definition: FormDefinition<TValu
   return <FormRenderer definition={definition} initialValues={initialValues} context={{ ...context, ...overrides }} draftAdapter={new MemoryDraftAdapter()} dataSources={dataSources} stateOverrides={stateOverrides} />;
 }
 
-function singleField(type: string, extra: Record<string, unknown> = {}): FormDefinition<FormValues> {
+function singleField(type: BuiltInFieldType, extra: Record<string, unknown> = {}): FormDefinition<FormValues> {
   return {
     id: `story-${type}`,
     version: 1,
@@ -61,7 +61,13 @@ export const FileField: Story = {
 };
 
 export const RepeatingGroup: Story = {
-  render: () => renderForm(singleField("repeating-group", { fields: [] }), { value: [] })
+  render: () => renderForm(singleField("repeating-group", {
+    fields: [
+      { id: "type", type: "text", label: "Type", defaultValue: "" },
+      { id: "quantity", type: "number", label: "Quantity", defaultValue: 0 },
+      { id: "weight", type: "number", label: "Weight", defaultValue: 0 }
+    ]
+  }), { value: [] })
 };
 
 export const ConditionalField: Story = {

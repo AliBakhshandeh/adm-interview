@@ -95,7 +95,16 @@ export const shipmentBookingForm: FormDefinition<BookingValue> = {
     {
       id: "containers",
       title: { en: "Containers", fa: "کانتینرها" },
-      fields: [{ id: "containers", type: "repeating-group", label: { en: "Container list", fa: "فهرست کانتینرها" }, fields: [] }]
+      fields: [{
+        id: "containers",
+        type: "repeating-group",
+        label: { en: "Container list", fa: "فهرست کانتینرها" },
+        fields: [
+          { id: "type", type: "text", label: { en: "Type", fa: "نوع" }, defaultValue: "" },
+          { id: "quantity", type: "number", label: { en: "Quantity", fa: "تعداد" }, defaultValue: 0 },
+          { id: "weight", type: "number", label: { en: "Weight", fa: "وزن" }, defaultValue: 0 }
+        ]
+      }]
     },
     {
       id: "charges",
@@ -172,7 +181,16 @@ export const employeeOnboardingForm: FormDefinition<EmployeeValue> = {
     { id: "equipment", title: { en: "Equipment", fa: "تجهیزات" }, fields: [
       { id: "equipment", type: "multi-select", label: { en: "Equipment", fa: "تجهیزات موردنیاز" }, options: [{ value: "laptop", label: { en: "Laptop", fa: "لپ‌تاپ" } }, { value: "phone", label: { en: "Phone", fa: "تلفن" } }, { value: "badge", label: { en: "Access badge", fa: "کارت دسترسی" } }] }
     ] },
-    { id: "contacts", title: { en: "Emergency Contacts", fa: "تماس اضطراری" }, fields: [{ id: "emergencyContacts", type: "repeating-group", label: { en: "Emergency contacts", fa: "افراد تماس اضطراری" }, fields: [] }, { id: "attachments", type: "file", label: { en: "Documents", fa: "مدارک" } }] }
+    { id: "contacts", title: { en: "Emergency Contacts", fa: "تماس اضطراری" }, fields: [{
+      id: "emergencyContacts",
+      type: "repeating-group",
+      label: { en: "Emergency contacts", fa: "افراد تماس اضطراری" },
+      fields: [
+        { id: "name", type: "text", label: { en: "Name", fa: "نام" }, defaultValue: "" },
+        { id: "phone", type: "text", label: { en: "Phone", fa: "تلفن" }, defaultValue: "" },
+        { id: "relation", type: "text", label: { en: "Relation", fa: "نسبت" }, defaultValue: "" }
+      ]
+    }, { id: "attachments", type: "file", label: { en: "Documents", fa: "مدارک" } }] }
   ],
   steps: [
     { id: "personal", title: { en: "Personal", fa: "فردی" }, sectionIds: ["personal"] },

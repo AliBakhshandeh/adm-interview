@@ -5,7 +5,7 @@
   --card: #fbfbfa;
   --card-soft: #f6f6f5;
   --text: #080808;
-  --muted: #707070;
+  --muted: #666666;
   --faint: #a8a8a8;
   --line: #dededc;
   --line-soft: #ececea;
@@ -322,7 +322,7 @@ button, input, select, textarea { font: inherit; }
 
 .af-step-error { color: var(--red); }
 .af-step-completed:not(.af-step-active) {
-  color: #159f50;
+  color: #0b6f35;
   border-color: rgba(65, 201, 111, .5);
   background: var(--green-soft);
 }
@@ -817,6 +817,25 @@ button, input, select, textarea { font: inherit; }
   .top-actions { flex-wrap: wrap; }
   .search-box { width: 100%; }
   .af-grid { grid-template-columns: 1fr; }
+  .af-form-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+    padding: 20px 18px 16px;
+  }
+  .af-form-header h1 {
+    font-size: 22px;
+    line-height: 1.15;
+    overflow-wrap: anywhere;
+  }
+  .af-status {
+    width: fit-content;
+    max-width: 100%;
+    justify-content: flex-start;
+    white-space: normal;
+  }
+  .af-stepper { padding: 14px 18px; }
+  .af-step { min-width: 102px; }
   .af-section { grid-template-columns: 1fr; }
   .af-remote-select-row { grid-template-columns: 1fr; }
   .af-repeat-item { grid-template-columns: 1fr; align-items: stretch; }

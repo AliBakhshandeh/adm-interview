@@ -17,6 +17,22 @@ export type FormRendererProps<TValues extends FormValues> = {
   stateOverrides?: FormEngineOptions<TValues>["stateOverrides"];
 };
 
+export type FieldRendererContext<TValues extends FormValues = FormValues> = {
+  field: FieldDefinition<TValues>;
+  engine: FormEngine<TValues>;
+  state: FormEngine<TValues>["state"];
+  value: unknown;
+  locale: FormPlatformContext["locale"];
+  disabled: boolean;
+  required: boolean;
+  errors: string[];
+  warnings: string[];
+  describedBy?: string;
+  setValue: (value: unknown) => void;
+};
+
+export type CustomFieldRenderer<TValues extends FormValues = FormValues> = (context: FieldRendererContext<TValues>) => React.ReactNode;
+
 const FormContext = createContext<FormEngine<FormValues> | null>(null);
 
 export function useFormEngine<TValues extends FormValues>(): FormEngine<TValues> {
@@ -36,12 +52,25 @@ export function useFieldSnapshot<TValues extends FormValues>(fieldId: keyof TVal
 }
 
 export function FormRenderer<TValues extends FormValues>(props: FormRendererProps<TValues>): JSX.Element {
-  const engine = useMemo(() => new FormEngine(props), [props.definition.id, props.definition.version, props.context.tenantId, props.context.userId]);
+  const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition.id, props.definition.version, props.context.tenantId, props.context.userId]);
   return (
     <FormContext.Provider value={engine as FormEngine<FormValues>}>
       <EnterpriseForm definition={props.definition} />
     </FormContext.Provider>
   );
+}
+
+function compactEngineOptions<TValues extends FormValues>(props: FormRendererProps<TValues>): FormEngineOptions<TValues> {
+  return {
+    definition: props.definition,
+    initialValues: props.initialValues,
+    context: props.context,
+    ...(props.registry ? { registry: props.registry } : {}),
+    ...(props.draftAdapter ? { draftAdapter: props.draftAdapter } : {}),
+    ...(props.plugins ? { plugins: props.plugins } : {}),
+    ...(props.dataSources ? { dataSources: props.dataSources } : {}),
+    ...(props.stateOverrides ? { stateOverrides: props.stateOverrides } : {})
+  };
 }
 
 function EnterpriseForm<TValues extends FormValues>({ definition }: { definition: FormDefinition<TValues> }): JSX.Element {
@@ -51,7 +80,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition }: { definition
   const copy = uiCopy[locale];
   const dir = locale === "fa" ? "rtl" : "ltr";
   const steps = definition.steps ?? definition.sections.map((section) => ({ id: section.id, title: section.title, sectionIds: [section.id] }));
-  const allFields = flattenFields(definition);
+  const allFields = flattenFields(definition) as FieldDefinition<FormValues>[];
   const activeStep = steps[state.currentStep] ?? steps[0]!;
   const activeSections = definition.sections.filter((section) => activeStep.sectionIds.includes(section.id));
   const stepStatuses = engine.getStepStatuses();
@@ -80,7 +109,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition }: { definition
       </header>
       <Stepper steps={steps.map((step) => label(step.title, locale))} current={state.currentStep} errors={stepErrors} completed={completedSteps} disabled={disabledSteps} onSelect={(index) => void engine.goToStep(index)} dir={dir} ariaLabel={copy.formSteps} />
       <ErrorSummary errors={state.errors.filter((error) => error.severity === "error")} title={copy.reviewRequired} onFocusField={(fieldId) => document.getElementById(fieldId)?.focus()} />
-      <main className="af-sections">
+      <div className="af-sections">
         {activeSections.map((section) => (
           <section className="af-section" key={section.id}>
             <div className="af-section-heading">
@@ -92,7 +121,7 @@ function EnterpriseForm<TValues extends FormValues>({ definition }: { definition
             </div>
           </section>
         ))}
-      </main>
+      </div>
       <footer className="af-actions">
         <Button type="button" disabled={state.currentStep === 0} onClick={() => void engine.goToStep(state.currentStep - 1)}>{copy.back}</Button>
         <Button type="button" onClick={() => void engine.saveDraft()}>{copy.saveDraft}</Button>
@@ -115,11 +144,28 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
   const errors = state.errors.filter((error) => error.fieldId === field.id && error.severity === "error").map((error) => error.message);
   const warnings = [...(state.warnings.get(field.id) ?? []), ...state.errors.filter((error) => error.fieldId === field.id && error.severity === "warning").map((error) => error.message)];
   const disabled = !state.enabledFields.has(field.id) || state.readOnlyFields.has(field.id);
-  const required = state.requiredFields.has(field.id) || field.required;
-  const common = { id: field.id, disabled, "aria-invalid": errors.length > 0 };
+  const required = state.requiredFields.has(field.id) || Boolean(field.required);
+  const describedBy = describedByFor(field, state.pendingAsyncValidations.has(field.id), errors.length > 0);
+  const common = { id: field.id, disabled, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
+  const customRenderer = engine.registry.get(field.type)?.render as CustomFieldRenderer<TValues> | undefined;
+  const customField = customRenderer?.({
+    field,
+    engine,
+    state,
+    value,
+    locale,
+    disabled,
+    required,
+    errors,
+    warnings,
+    ...(describedBy ? { describedBy } : {}),
+    setValue: (next) => engine.setValue(field.id, next as TValues[typeof field.id])
+  });
   return (
-    <FieldShell id={field.id} label={label(field.label, locale)} helpText={field.helpText ? label(field.helpText, locale) : undefined} required={required} requiredLabel={copy.required} pending={state.pendingAsyncValidations.has(field.id)} pendingLabel={copy.validatingField} errors={errors} warnings={warnings}>
-      {field.type === "textarea" ? (
+    <FieldShell id={field.id} label={label(field.label, locale)} {...(field.helpText ? { helpText: label(field.helpText, locale) } : {})} required={required} requiredLabel={copy.required} pending={state.pendingAsyncValidations.has(field.id)} pendingLabel={copy.validatingField} errors={errors} warnings={warnings}>
+      {customField ? (
+        customField
+      ) : field.type === "textarea" ? (
         <TextArea {...common} value={String(value ?? "")} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
       ) : field.type === "number" || field.type === "currency" ? (
         <>
@@ -134,11 +180,11 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
       ) : field.type === "checkbox" ? (
         <Checkbox {...common} checked={Boolean(value)} onChange={(event) => engine.setValue(field.id, event.currentTarget.checked as TValues[typeof field.id])} />
       ) : field.type === "radio" ? (
-        <RadioGroup id={field.id} name={field.id} disabled={disabled} value={String(value ?? "")} options={remoteOptions.options.map((option) => ({ value: option.value, label: label(option.label, locale), disabled: option.disabled }))} onChange={(next) => engine.setValue(field.id, next as TValues[typeof field.id])} />
+        <RadioGroup id={field.id} name={field.id} disabled={disabled} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(next) => engine.setValue(field.id, next as TValues[typeof field.id])} />
       ) : field.type === "select" ? (
-        field.dataSource ? <RemoteSelectField field={field} common={common} value={String(value ?? "")} remoteOptions={remoteOptions} /> : <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} value={String(value ?? "")} options={remoteOptions.options.map((option) => ({ value: option.value, label: label(option.label, locale), disabled: option.disabled }))} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
+        field.dataSource ? <RemoteSelectField field={field} common={common} value={String(value ?? "")} remoteOptions={remoteOptions} /> : <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
       ) : field.type === "multi-select" ? (
-        <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} multiple value={Array.isArray(value) ? value.map(String) : []} options={remoteOptions.options.map((option) => ({ value: option.value, label: label(option.label, locale) }))} onChange={(event) => engine.setValue(field.id, Array.from(event.currentTarget.selectedOptions).map((option) => option.value) as TValues[typeof field.id])} />
+        <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} multiple value={Array.isArray(value) ? value.map(String) : []} options={optionView(remoteOptions.options, locale)} onChange={(event) => engine.setValue(field.id, Array.from(event.currentTarget.selectedOptions).map((option) => option.value) as TValues[typeof field.id])} />
       ) : field.type === "file" ? (
         <FileDrop
           id={field.id}
@@ -175,7 +221,7 @@ function RemoteSelectField<TValues extends FormValues>({ field, common, value, r
     <div className="af-remote-select">
       <TextInput aria-label={copy.searchOptions} disabled={common.disabled} value={query} placeholder={copy.searchOptions} onChange={(event) => setQuery(event.currentTarget.value)} />
       <div className="af-remote-select-row">
-        <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} value={value} options={remoteOptions.options.map((option) => ({ value: option.value, label: label(option.label, locale), disabled: option.disabled }))} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
+        <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} value={value} options={optionView(remoteOptions.options, locale)} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
         <Button type="button" disabled={common.disabled} onClick={() => void engine.loadRemoteOptions(field, query)}>{copy.search}</Button>
         {remoteOptions.nextCursor ? <Button type="button" disabled={common.disabled} onClick={() => void engine.loadRemoteOptions(field, query, remoteOptions.nextCursor)}>{copy.loadMore}</Button> : null}
       </div>
@@ -212,9 +258,11 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
   const locale = engine["options"].context.locale;
   const copy = uiCopy[locale];
   const items = Array.isArray(state.values[field.id]) ? (state.values[field.id] as Array<Record<string, unknown>>) : [];
-  const labels = copy.repeatingFieldLabels;
-  const updateItem = (itemId: string, key: string, rawValue: string): void => {
-    const next = items.map((item) => item.id === itemId ? { ...item, [key]: numericRepeatingKeys.has(key) && rawValue !== "" ? Number(rawValue) : rawValue } : item);
+  const childFields = repeatingChildFields(field);
+  const labels: Record<string, string> = copy.repeatingFieldLabels;
+  const updateItem = (itemId: string, child: FieldDefinition<FormValues>, rawValue: string | boolean): void => {
+    const nextValue = (child.type === "number" || child.type === "currency") && rawValue !== "" ? Number(rawValue) : rawValue;
+    const next = items.map((item) => item.id === itemId ? { ...item, [child.id]: nextValue } : item);
     engine.setValue(field.id, next as TValues[typeof field.id]);
   };
   return (
@@ -222,15 +270,24 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
       {items.map((item) => (
         <div className="af-repeat-item" key={String(item.id)}>
           <div className="af-repeat-fields">
-            {repeatingKeys(field.id).map((key) => (
-              <label className="af-repeat-field" key={key}>
-                <span>{labels[key] ?? key}</span>
-                <input
-                  className="af-input af-repeat-input"
-                  type={numericRepeatingKeys.has(key) ? "number" : "text"}
-                  value={String(item[key] ?? "")}
-                  onChange={(event) => updateItem(String(item.id), key, event.currentTarget.value)}
-                />
+            {childFields.map((child) => (
+              <label className="af-repeat-field" key={child.id}>
+                <span>{label(child.label, locale) || labels[child.id] || child.id}</span>
+                {child.type === "checkbox" ? (
+                  <input
+                    className="af-checkbox"
+                    type="checkbox"
+                    checked={Boolean(item[child.id])}
+                    onChange={(event) => updateItem(String(item.id), child, event.currentTarget.checked)}
+                  />
+                ) : (
+                  <input
+                    className="af-input af-repeat-input"
+                    type={child.type === "number" || child.type === "currency" ? "number" : "text"}
+                    value={String(item[child.id] ?? "")}
+                    onChange={(event) => updateItem(String(item.id), child, event.currentTarget.value)}
+                  />
+                )}
               </label>
             ))}
           </div>
@@ -241,9 +298,14 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
           </div>
         </div>
       ))}
-      <Button className="af-repeat-add" type="button" onClick={() => engine.addRepeatingItem(field.id, defaultRepeatingItem(field.id, locale))}><Plus size={16} />{copy.addItem}</Button>
+      <Button className="af-repeat-add" type="button" onClick={() => engine.addRepeatingItem(field.id, defaultRepeatingItem(childFields))}><Plus size={16} />{copy.addItem}</Button>
     </div>
   );
+}
+
+function describedByFor<TValues extends FormValues>(field: FieldDefinition<TValues>, pending: boolean, hasError: boolean): string | undefined {
+  const ids = [field.helpText ? `${field.id}-help` : undefined, pending ? `${field.id}-pending` : undefined, hasError ? `${field.id}-error` : undefined].filter(Boolean);
+  return ids.length ? ids.join(" ") : undefined;
 }
 
 function SubmissionPanel({ fields }: { fields: FieldDefinition<FormValues>[] }): JSX.Element | null {
@@ -302,6 +364,14 @@ function label(value: LocalizedText, locale: "en" | "fa"): string {
   return text(value, locale);
 }
 
+function optionView(options: SelectOption[], locale: "en" | "fa"): Array<{ value: string; label: string; disabled?: boolean }> {
+  return options.map((option) => ({
+    value: option.value,
+    label: label(option.label, locale),
+    ...(option.disabled ? { disabled: option.disabled } : {})
+  }));
+}
+
 function formatFieldValue(type: "number" | "currency" | "date", value: unknown, locale: "en" | "fa", currency: string): string {
   if (value === undefined || value === null || value === "") return "";
   const intlLocale = locale === "fa" ? "fa-IR" : "en-US";
@@ -314,21 +384,21 @@ function formatFieldValue(type: "number" | "currency" | "date", value: unknown, 
   return new Intl.NumberFormat(intlLocale, type === "currency" ? { style: "currency", currency, maximumFractionDigits: 2 } : { maximumFractionDigits: 2 }).format(numeric);
 }
 
-function defaultRepeatingItem(fieldId: string, locale: "en" | "fa"): Record<string, unknown> {
-  if (fieldId === "emergencyContacts") {
-    return locale === "fa"
-      ? { name: "", phone: "", relation: "" }
-      : { name: "", phone: "", relation: "" };
-  }
-  return { type: "", quantity: "", weight: "" };
+function repeatingChildFields<TValues extends FormValues>(field: FieldDefinition<TValues>): FieldDefinition<FormValues>[] {
+  if (field.type === "repeating-group" && "fields" in field) return field.fields as FieldDefinition<FormValues>[];
+  return [];
 }
 
-function repeatingKeys(fieldId: string): string[] {
-  if (fieldId === "emergencyContacts") return ["name", "phone", "relation"];
-  return ["type", "quantity", "weight"];
+function defaultRepeatingItem(fields: FieldDefinition<FormValues>[]): Record<string, unknown> {
+  return Object.fromEntries(fields.map((field) => [field.id, field.defaultValue ?? defaultValueForField(field)]));
 }
 
-const numericRepeatingKeys = new Set(["quantity", "weight"]);
+function defaultValueForField(field: FieldDefinition<FormValues>): unknown {
+  if (field.type === "number" || field.type === "currency") return 0;
+  if (field.type === "checkbox") return false;
+  if (field.type === "multi-select" || field.type === "file" || field.type === "repeating-group") return [];
+  return "";
+}
 
 type FormAttachment = { id: string; name: string; size: number; type?: string; status: "idle" | "uploading" | "uploaded" | "failed" | "removing" | "removed"; error?: string };
 

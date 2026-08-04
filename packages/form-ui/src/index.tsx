@@ -55,9 +55,9 @@ export function Checkbox(props: React.InputHTMLAttributes<HTMLInputElement>): JS
   return <input {...props} type="checkbox" className={clsx("af-checkbox", props.className)} />;
 }
 
-export function RadioGroup(props: { id: string; name: string; value: string; disabled?: boolean; options: Array<{ value: string; label: string; disabled?: boolean }>; onChange: (value: string) => void }): JSX.Element {
+export function RadioGroup(props: { id: string; name: string; value: string; disabled?: boolean; invalid?: boolean; ariaDescribedBy?: string; options: Array<{ value: string; label: string; disabled?: boolean }>; onChange: (value: string) => void }): JSX.Element {
   return (
-    <div className="af-radio-group" role="radiogroup" aria-labelledby={`${props.id}-legend`}>
+    <div className="af-radio-group" role="radiogroup" aria-labelledby={`${props.id}-legend`} aria-describedby={props.ariaDescribedBy} aria-invalid={props.invalid || undefined}>
       <span id={`${props.id}-legend`} className="af-sr-only">{props.name}</span>
       {props.options.map((option) => (
         <label className="af-radio-option" key={option.value}>
