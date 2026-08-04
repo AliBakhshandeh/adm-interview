@@ -8,11 +8,12 @@
   "scripts": {
     "build": "tsup src/index.tsx --format esm --external react --dts",
     "typecheck": "tsup src/index.tsx --format esm --external react",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/form-react/src/index.test.tsx",
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": {
     "@admiral/form-core": "workspace:*",
+    "@admiral/form-rules": "workspace:*",
     "@admiral/form-schema": "workspace:*",
     "@admiral/form-ui": "workspace:*",
     "@admiral/form-validation": "workspace:*"

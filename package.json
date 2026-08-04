@@ -25,7 +25,8 @@
     "generate:multi-step": "pnpm --filter @admiral/form-cli build && sh -c 'node packages/form-cli/dist/index.js generate \"$1\" --template multi-step' --",
     "docs": "printf 'Open docs/index.md\\n'",
     "check": "pnpm build && pnpm typecheck && pnpm test",
-    "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm e2e && pnpm storybook:build"
+    "bundle:budget": "node scripts/check-bundle-budget.mjs",
+    "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm e2e && pnpm bundle:budget && pnpm storybook:build"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",

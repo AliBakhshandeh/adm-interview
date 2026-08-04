@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/form-rules/src/index.test.ts",
     "lint": "eslint src --max-warnings=0"
   },
   "dependencies": { "@admiral/form-schema": "workspace:*" }

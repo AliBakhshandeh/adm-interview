@@ -164,6 +164,9 @@ importers:
       '@admiral/form-core':
         specifier: workspace:*
         version: link:../form-core
+      '@admiral/form-rules':
+        specifier: workspace:*
+        version: link:../form-rules
       '@admiral/form-schema':
         specifier: workspace:*
         version: link:../form-schema

@@ -3,7 +3,16 @@ import type { StorybookConfig } from "@storybook/react-vite";
 const config: StorybookConfig = {
   stories: ["../src/**/*.stories.@(ts|tsx)"],
   addons: ["@storybook/addon-essentials", "@storybook/addon-interactions"],
-  framework: { name: "@storybook/react-vite", options: {} }
+  framework: { name: "@storybook/react-vite", options: {} },
+  viteFinal(config) {
+    return {
+      ...config,
+      build: {
+        ...config.build,
+        chunkSizeWarningLimit: 1000
+      }
+    };
+  }
 };
 
 export default config;
