@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
@@ -47,4 +48,33 @@ test("Journey B - conflict preserves user values", async ({ page }) => {
   await expect(page.getByLabel("Booking reference")).toHaveValue("BK-4090");
   await page.getByRole("button", { name: "Review and resubmit" }).click();
   await expect(page.getByText("Submission: succeeded")).toBeVisible();
+});
+
+test("Journey C - direct navigation blocks skipped required steps", async ({ page }) => {
+  await page.getByLabel("Customer").selectOption("acme");
+  await page.getByLabel("Booking reference").fill("BK-1234");
+  await page.getByRole("button", { name: "Charges" }).click();
+  await expect(page.getByRole("heading", { name: "General Information" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "This field is required." }).first()).toBeVisible();
+  await page.getByRole("button", { name: "Route" }).click();
+  await expect(page.getByLabel("Port of loading")).toHaveAttribute("aria-describedby", /portOfLoading-error/);
+});
+
+test("Journey D - keyboard and mobile accessibility smoke", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("heading", { name: "Shipment Booking" })).toBeVisible();
+  await page.getByRole("button", { name: "Next" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Review required")).toBeVisible();
+  await expect(page.getByLabel("Booking reference")).toHaveAttribute("aria-describedby", /bookingReference-error/);
+});
+
+test("Journey E - axe accessibility audit for primary journey", async ({ page }) => {
+  await page.getByLabel("Customer").selectOption("acme");
+  await page.getByLabel("Booking reference").fill("BK-1234");
+  await page.getByRole("button", { name: "Route" }).click();
+  await page.getByLabel("Port of loading").selectOption("CNSHA");
+  await page.getByLabel("Port of discharge").selectOption("IRBND");
+  const accessibilityScanResults = await new AxeBuilder({ page }).analyze();
+  expect(accessibilityScanResults.violations).toEqual([]);
 });

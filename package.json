@@ -28,6 +28,7 @@
     "verify": "pnpm build && pnpm typecheck && pnpm test && pnpm e2e && pnpm storybook:build"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
     "@eslint/js": "^9.39.5",
     "@playwright/test": "^1.45.3",
     "@storybook/addon-essentials": "8.2.9",

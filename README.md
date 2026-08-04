@@ -373,6 +373,18 @@ Implemented strategies:
 
 The tests include a 150-field, 20-section, 50-rule performance scenario.
 
+## Effort Estimate
+
+Estimated production hardening beyond this assessment:
+
+| Area | Estimate | Notes |
+| --- | ---: | --- |
+| Backend draft/submission adapters | 3-5 days | API contracts, retry policy, encrypted persistence, idempotency checks |
+| Attachment upload pipeline | 3-4 days | Signed URLs, size/type enforcement, malware scanning, retention |
+| Enterprise plugin certification | 2-3 days | Allowlist, lifecycle contract tests, compatibility matrix |
+| Visual builder/editor | 2-4 weeks | Drag/drop authoring, schema diffing, preview, approval workflow |
+| Governance and rollout | 3-5 days | Version policy, migration playbooks, ownership and support model |
+
 ## Security And Production Notes
 
 Implemented safeguards:

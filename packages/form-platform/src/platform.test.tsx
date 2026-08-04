@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { Profiler } from "react";
 import {
+  type BuiltInFieldType,
   FieldRegistry,
   FormEngine,
   FormRenderer,
@@ -82,6 +84,14 @@ describe("form platform unit coverage", () => {
     expect(engine.state.readOnlyFields.has("discount")).toBe(true);
   });
 
+  it("keeps permission read-only state after recalculation", () => {
+    const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext({ permissions: [] }) });
+    engine.setValue("baseCharge", 1500);
+    expect(engine.state.readOnlyFields.has("discount")).toBe(true);
+    engine.setValue("discount", 100);
+    expect(engine.state.values.discount).toBe(0);
+  });
+
   it("generates tenant-aware draft keys", () => {
     expect(createDraftKey({ tenantId: "tenant-a", userId: "u1" }, "shipment-booking", "new", 3)).toBe("tenant-a:u1:shipment-booking:new:v3");
   });
@@ -104,7 +114,9 @@ describe("form platform unit coverage", () => {
 
   it("registers attachment plugin field type", () => {
     const registry = createDefaultFieldRegistry();
-    attachmentPlugin().setup({ registry, telemetry: { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() }, context: testContext(), platformVersion: "0.1.0", formVersion: 2 });
+    const config = { maxSizeMb: 25, acceptedTypes: ["application/pdf"] };
+    attachmentPlugin(config).setup({ registry, telemetry: { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() }, context: testContext(), platformVersion: "0.1.0", formVersion: 2 });
+    expect(registry.get("file")?.config).toEqual(config);
     expect(registry.has("attachment")).toBe(true);
   });
 
@@ -120,7 +132,7 @@ describe("form platform unit coverage", () => {
 
 describe("form platform integration coverage", () => {
   it("changing one field shows conditional dangerous goods field", async () => {
-    renderFormPlatform({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234" } });
+    renderFormPlatform({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234", portOfLoading: "CNSHA", portOfDischarge: "IRBND", voyage: "VOY-881" } });
     fireEvent.click(screen.getByText("Cargo"));
     fireEvent.change(await screen.findByLabelText(/Cargo type/i), { target: { value: "dangerous-goods" } });
     expect(await screen.findByLabelText(/UN number/i)).toBeInTheDocument();
@@ -134,6 +146,14 @@ describe("form platform integration coverage", () => {
     expect(engine.getStepStatuses()[0]?.hasError).toBe(true);
   });
 
+  it("blocks direct navigation when an intermediate step is invalid", async () => {
+    const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234" }, context: testContext() });
+    const moved = await engine.goToStep(3);
+    expect(moved).toBe(false);
+    expect(engine.state.currentStep).toBe(0);
+    expect(engine.state.errors.some((error) => error.fieldId === "portOfLoading")).toBe(true);
+  });
+
   it("marks completed steps after required values are present", async () => {
     const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234" }, context: testContext() });
     const moved = await engine.goToStep(1);
@@ -142,7 +162,7 @@ describe("form platform integration coverage", () => {
   });
 
   it("changing a charge updates calculated total", async () => {
-    renderFormPlatform({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234" } });
+    renderFormPlatform({ definition: shipmentBookingForm, initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234", portOfLoading: "CNSHA", portOfDischarge: "IRBND", voyage: "VOY-881" } });
     fireEvent.click(screen.getByText("Charges"));
     fireEvent.change(await screen.findByLabelText(/Discount/i), { target: { value: "50" } });
     expect(await screen.findByLabelText(/Total charge/i)).toHaveValue("1366");
@@ -159,6 +179,39 @@ describe("form platform integration coverage", () => {
     expect(errors.some((error) => error.fieldId === "nationalId")).toBe(true);
   });
 
+  it("keeps only the latest async validation result", async () => {
+    const resolvers: Array<(value: boolean) => void> = [];
+    const definition: FormDefinition<{ nationalId: string }> = {
+      id: "async-race",
+      version: 1,
+      title: "Async race",
+      sections: [{
+        id: "main",
+        title: "Main",
+        fields: [{
+          id: "nationalId",
+          type: "text",
+          label: "National ID",
+          validation: [{
+            type: "async",
+            message: "National ID is already registered.",
+            validate: () => new Promise<boolean>((resolve) => resolvers.push(resolve))
+          }]
+        }]
+      }]
+    };
+    const engine = new FormEngine({ definition, initialValues: { nationalId: "old" }, context: testContext() });
+    const first = engine.validate();
+    engine.setValue("nationalId", "new");
+    const second = engine.validate();
+    resolvers[1]?.(true);
+    await second;
+    resolvers[0]?.(false);
+    await first;
+    expect(engine.state.errors).toEqual([]);
+    expect(engine.state.submission.status).toBe("idle");
+  });
+
   it("saves and restores draft", async () => {
     const adapter = new MemoryDraftAdapter();
     const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext(), draftAdapter: adapter });
@@ -169,10 +222,57 @@ describe("form platform integration coverage", () => {
     expect(restored.state.values.bookingReference).toBe("BK-1234");
   });
 
+  it("discovers and migrates drafts saved under older version keys", async () => {
+    const adapter = new MemoryDraftAdapter();
+    await adapter.save(createDraftKey(testContext(), shipmentBookingForm.id, "new", 1), {
+      values: { ...bookingInitialValues, bookingReference: "BK-1001", totalCharge: 0 },
+      formVersion: 1,
+      savedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 10000).toISOString()
+    });
+    const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext(), draftAdapter: adapter });
+    await engine.restoreDraft();
+    expect(engine.state.values.bookingReference).toBe("BK-1001");
+    expect(engine.state.values.totalCharge).toBe(1416);
+  });
+
   it("permission prevents field editing", () => {
     const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext({ permissions: [] }) });
     engine.setValue("discount", 900);
     expect(engine.state.values.discount).toBe(0);
+  });
+
+  it("applies form-level permissions to every field", () => {
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "restricted-form",
+      version: 1,
+      title: "Restricted form",
+      permission: { view: "form.view", edit: "form.edit" },
+      sections: [{ id: "main", title: "Main", fields: [{ id: "reference", type: "text", label: "Reference" }] }]
+    };
+    const engine = new FormEngine({ definition, initialValues: { reference: "REF-1" }, context: testContext({ permissions: ["form.view"] }) });
+    expect(engine.state.visibleFields.has("reference")).toBe(true);
+    expect(engine.state.readOnlyFields.has("reference")).toBe(true);
+    engine.setValue("reference", "REF-2");
+    expect(engine.state.values.reference).toBe("REF-1");
+  });
+
+  it("applies section-level permissions to contained fields", () => {
+    const definition: FormDefinition<{ publicRef: string; salary: number }> = {
+      id: "section-restricted-form",
+      version: 1,
+      title: "Section restricted form",
+      sections: [
+        { id: "public", title: "Public", fields: [{ id: "publicRef", type: "text", label: "Public reference" }] },
+        { id: "payroll", title: "Payroll", permission: { view: "payroll.view", edit: "payroll.edit" }, fields: [{ id: "salary", type: "currency", label: "Salary" }] }
+      ]
+    };
+    const hidden = new FormEngine({ definition, initialValues: { publicRef: "REF", salary: 1000 }, context: testContext({ permissions: [] }) });
+    expect(hidden.state.visibleFields.has("publicRef")).toBe(true);
+    expect(hidden.state.visibleFields.has("salary")).toBe(false);
+    const readOnly = new FormEngine({ definition, initialValues: { publicRef: "REF", salary: 1000 }, context: testContext({ permissions: ["payroll.view"] }) });
+    expect(readOnly.state.visibleFields.has("salary")).toBe(true);
+    expect(readOnly.state.readOnlyFields.has("salary")).toBe(true);
   });
 
   it("version conflict preserves user values", async () => {
@@ -190,12 +290,62 @@ describe("form platform integration coverage", () => {
     expect(engine.state.submission).toBe(first);
   });
 
+  it("normalizes thrown submission failures into failed state", async () => {
+    const definition: FormDefinition<{ reference: string }> = {
+      id: "submit-failure",
+      version: 1,
+      title: "Submit failure",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "reference", type: "text", label: "Reference" }] }],
+      submission: {
+        submit: async () => {
+          throw new Error("Gateway timeout");
+        }
+      }
+    };
+    const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const engine = new FormEngine({ definition, initialValues: { reference: "REF-1" }, context: testContext(), telemetry });
+    const result = await engine.submit();
+    expect(result.status).toBe("failed");
+    expect(result.status === "failed" ? result.error.message : "").toBe("Gateway timeout");
+    expect(telemetry.captureError).toHaveBeenCalled();
+  });
+
   it("repeating group preserves item identity", () => {
     const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext() });
     engine.addRepeatingItem("containers", { quantity: 1 });
     const id = engine.state.values.containers[0]!.id;
     engine.moveRepeatingItem("containers", id, 1);
     expect(engine.state.values.containers[0]!.id).toBe(id);
+  });
+
+  it("creates repeating items from nested schema defaults", () => {
+    const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext() });
+    engine.addRepeatingItem("containers", {});
+    expect(engine.state.values.containers[0]).toMatchObject({ type: "", quantity: 0, weight: 0 });
+  });
+
+  it("renders plugin registered custom field renderers", () => {
+    const registry = createDefaultFieldRegistry();
+    registry.register({
+      type: "rating",
+      render: ({ value, setValue }) => <button type="button" onClick={() => setValue(5)}>Rating {String(value ?? 0)}</button>
+    });
+    const definition: FormDefinition<{ score: number }> = {
+      id: "custom",
+      version: 1,
+      title: "Custom",
+      sections: [{ id: "main", title: "Main", fields: [{ id: "score", type: "rating", custom: true, label: "Score" }] }]
+    };
+    render(<FormRenderer definition={definition} initialValues={{ score: 1 }} context={testContext()} registry={registry} draftAdapter={new MemoryDraftAdapter()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Rating 1/i }));
+    expect(screen.getByRole("button", { name: /Rating 5/i })).toBeInTheDocument();
+  });
+
+  it("links validation errors to the invalid input", async () => {
+    renderFormPlatform({ definition: shipmentBookingForm, initialValues: bookingInitialValues });
+    fireEvent.click(screen.getByText("Next"));
+    const input = await screen.findByLabelText(/Booking reference/i);
+    expect(input).toHaveAttribute("aria-describedby", expect.stringContaining("bookingReference-error"));
   });
 
   it("plugins capture audit and analytics", () => {
@@ -205,8 +355,26 @@ describe("form platform integration coverage", () => {
     expect(events.some((event) => event.event === "field_changed")).toBe(true);
   });
 
+  it("plugins receive validation, submission, step, and draft lifecycle events", async () => {
+    const events: Array<{ event: string; timestamp: string }> = [];
+    const adapter = new MemoryDraftAdapter();
+    const engine = new FormEngine({
+      definition: shipmentBookingForm,
+      initialValues: { ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234", portOfLoading: "CNSHA", portOfDischarge: "IRBND", voyage: "VOY-881" },
+      context: testContext(),
+      draftAdapter: adapter,
+      plugins: [auditTrailPlugin(events)]
+    });
+    await engine.validate();
+    await engine.goToStep(1);
+    await engine.saveDraft();
+    await engine.discardDraft();
+    await engine.submit();
+    expect(events.map((event) => event.event)).toEqual(expect.arrayContaining(["validation_started", "validation_succeeded", "step_changed", "draft_saved", "draft_discarded", "submission_attempted", "submission_succeeded"]));
+  });
+
   it("keeps large-form field interaction inside the performance budget", () => {
-    const fields = Array.from({ length: 150 }, (_, index) => ({ id: `field${index}`, type: "text", label: `Field ${index}` }));
+    const fields = Array.from({ length: 150 }, (_, index) => ({ id: `field${index}`, type: "text" as BuiltInFieldType, label: `Field ${index}` }));
     const rules = Array.from({ length: 50 }, (_, index) => ({
       id: `rule${index}`,
       priority: index,
@@ -233,5 +401,26 @@ describe("form platform integration coverage", () => {
     const elapsed = performance.now() - startedAt;
     expect(elapsed).toBeLessThan(100);
     expect(unrelated).not.toHaveBeenCalled();
+  });
+
+  it("records telemetry measurements for rule and field latency", () => {
+    const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const engine = new FormEngine({ definition: shipmentBookingForm, initialValues: bookingInitialValues, context: testContext(), telemetry });
+    engine.setValue("baseCharge", 1300);
+    expect(telemetry.measure).toHaveBeenCalledWith("rule_evaluation_ms", expect.any(Number), expect.objectContaining({ fieldId: "baseCharge" }));
+    expect(telemetry.measure).toHaveBeenCalledWith("field_change_ms", expect.any(Number), expect.objectContaining({ fieldId: "baseCharge" }));
+  });
+
+  it("keeps React render commits inside the profiling budget", () => {
+    const commits: number[] = [];
+    render(
+      <Profiler id="shipment-form" onRender={(_id, _phase, actualDuration) => commits.push(actualDuration)}>
+        <FormRenderer definition={shipmentBookingForm} initialValues={{ ...bookingInitialValues, customer: "acme", bookingReference: "BK-1234" }} context={testContext()} draftAdapter={new MemoryDraftAdapter()} />
+      </Profiler>
+    );
+    commits.length = 0;
+    fireEvent.change(screen.getByLabelText(/Booking reference/i), { target: { value: "BK-9999" } });
+    expect(commits.length).toBeGreaterThan(0);
+    expect(Math.max(...commits)).toBeLessThan(100);
   });
 });
