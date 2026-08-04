@@ -104,25 +104,15 @@ export async function validateValues<TValues extends FormValues>(params: {
   signal?: AbortSignal;
 }): Promise<FormError[]> {
   const errors: FormError[] = [];
-  const fields = flattenFields(params.definition);
-  for (const field of fields) {
+  for (const field of topLevelFields(params.definition)) {
     if (params.fieldIds && !params.fieldIds.has(field.id)) continue;
     if (!params.visible.has(field.id)) continue;
     const value = params.values[field.id];
-    const required = field.required || params.required.has(field.id);
-    if (isEmpty(value)) {
-      if (required) errors.push(fieldError(field, text({ en: "This field is required.", fa: "این فیلد الزامی است." }, params.context.locale), "error", "schema"));
+    if (field.type === "repeating-group" && "fields" in field) {
+      errors.push(...await validateRepeatingField(field, value, params));
       continue;
     }
-    for (const rule of field.validation ?? []) {
-      try {
-        const passed = await evaluateValidationRule(rule, value, params.values, params.context, params.signal, params.cache);
-        if (!passed) errors.push(fieldError(field, text(rule.message, params.context.locale), rule.severity ?? "error", rule.type === "async" ? "server" : "client"));
-      } catch (error) {
-        if (params.signal?.aborted) return errors;
-        errors.push(fieldError(field, error instanceof Error ? error.message : text(rule.message, params.context.locale), "error", "server"));
-      }
-    }
+    errors.push(...await validateFieldValue(field, value, params.values, params.context, field.required || params.required.has(field.id), params.signal, params.cache));
   }
   for (const rule of params.definition.formValidation ?? []) {
     try {
@@ -134,6 +124,69 @@ export async function validateValues<TValues extends FormValues>(params: {
     }
   }
   return errors;
+}
+
+function topLevelFields<TValues extends FormValues>(definition: FormDefinition<TValues>): FieldDefinition<TValues>[] {
+  return definition.sections.flatMap((section) => section.fields);
+}
+
+async function validateRepeatingField<TValues extends FormValues>(field: FieldDefinition<TValues>, value: unknown, params: {
+  values: TValues;
+  context: FormPlatformContext;
+  required: Set<string>;
+  cache?: Map<string, boolean>;
+  signal?: AbortSignal;
+}): Promise<FormError[]> {
+  if (field.type !== "repeating-group" || !("fields" in field)) return [];
+  const errors: FormError[] = [];
+  const items = Array.isArray(value) ? value as Array<Record<string, unknown>> : [];
+  if ((field.required || params.required.has(field.id) || (field.minItems ?? 0) > 0) && items.length === 0) {
+    errors.push(fieldError(field, text({ en: "At least one item is required.", fa: "حداقل یک مورد الزامی است." }, params.context.locale), "error", "schema"));
+  }
+  if (field.minItems !== undefined && items.length < field.minItems) {
+    errors.push(fieldError(field, text({ en: `Add at least ${field.minItems} items.`, fa: `حداقل ${field.minItems} مورد اضافه کنید.` }, params.context.locale), "error", "schema"));
+  }
+  if (field.maxItems !== undefined && items.length > field.maxItems) {
+    errors.push(fieldError(field, text({ en: `Remove items until only ${field.maxItems} remain.`, fa: `تعداد موارد را به ${field.maxItems} کاهش دهید.` }, params.context.locale), "error", "schema"));
+  }
+  for (const [index, item] of items.entries()) {
+    const itemValues = item as FormValues;
+    for (const child of field.fields) {
+      const childErrors = await validateFieldValue(child, item[child.id], itemValues, params.context, Boolean(child.required), params.signal, params.cache);
+      errors.push(...childErrors.map((error) => ({ ...error, fieldId: repeatingPath(field.id, index, child.id) })));
+    }
+  }
+  return errors;
+}
+
+async function validateFieldValue<TValues extends FormValues>(
+  field: FieldDefinition<TValues>,
+  value: unknown,
+  values: TValues,
+  context: FormPlatformContext,
+  required: boolean,
+  signal?: AbortSignal,
+  cache?: Map<string, boolean>
+): Promise<FormError[]> {
+  const errors: FormError[] = [];
+  if (isEmpty(value)) {
+    if (required) errors.push(fieldError(field, text({ en: "This field is required.", fa: "این فیلد الزامی است." }, context.locale), "error", "schema"));
+    return errors;
+  }
+  for (const rule of field.validation ?? []) {
+    try {
+      const passed = await evaluateValidationRule(rule, value, values, context, signal, cache);
+      if (!passed) errors.push(fieldError(field, text(rule.message, context.locale), rule.severity ?? "error", rule.type === "async" ? "server" : "client"));
+    } catch (error) {
+      if (signal?.aborted) return errors;
+      errors.push(fieldError(field, error instanceof Error ? error.message : text(rule.message, context.locale), "error", "server"));
+    }
+  }
+  return errors;
+}
+
+function repeatingPath(fieldId: string, itemIndex: number, childId: string): string {
+  return `${fieldId}[${itemIndex}].${childId}`;
 }
 
 function permissionIssues(permission: unknown, path: string): SchemaValidationIssue[] {

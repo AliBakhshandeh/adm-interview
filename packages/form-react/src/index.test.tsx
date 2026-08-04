@@ -67,4 +67,34 @@ describe("form-react", () => {
     expect(renderA).toHaveBeenCalledTimes(2);
     expect(renderB).toHaveBeenCalledTimes(1);
   });
+
+  it("renders repeating select radio and custom controls with item semantics", () => {
+    const registry = createDefaultFieldRegistry();
+    const customRenderer = vi.fn(({ value, setValue, describedBy }) => <input aria-label="Custom note" aria-describedby={describedBy} value={String(value ?? "")} onChange={(event) => setValue(event.currentTarget.value)} />);
+    registry.register({ type: "custom-note", render: customRenderer });
+    const telemetry = { track: vi.fn(), measure: vi.fn(), captureError: vi.fn() };
+    const definition = {
+      id: "repeating-render",
+      version: 1,
+      title: "Repeating render",
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "contacts",
+        type: "repeating-group",
+        label: "Contacts",
+        fields: [
+          { id: "relation", type: "select", label: "Relation", options: [{ value: "manager", label: "Manager" }] },
+          { id: "channel", type: "radio", label: "Channel", options: [{ value: "email", label: "Email" }, { value: "phone", label: "Phone" }] },
+          { id: "note", type: "custom-note", custom: true, label: "Note" }
+        ]
+      }] }]
+    } as unknown as FormDefinition<{ contacts: Array<{ id: string; relation: string; channel: string; note: string }> }>;
+    render(<FormRenderer definition={definition} initialValues={{ contacts: [{ id: "one", relation: "", channel: "", note: "" }] }} context={context} registry={registry} stateOverrides={{ errors: [{ fieldId: "contacts[0].note", message: "Note failed.", severity: "error", source: "client" }] }} telemetry={telemetry} draftAdapter={new MemoryDraftAdapter()} />);
+    expect(screen.getByLabelText("Relation")).toBeInTheDocument();
+    expect(screen.getByRole("radiogroup", { name: /channel/i })).toHaveAttribute("aria-labelledby");
+    fireEvent.change(screen.getByLabelText("Custom note"), { target: { value: "Updated" } });
+    expect(customRenderer).toHaveBeenCalled();
+    expect(screen.getAllByText("Note failed.")).toHaveLength(2);
+    expect(screen.getByLabelText("Custom note")).toHaveAttribute("aria-describedby", "contacts[0].note-error");
+    expect(telemetry.measure).toHaveBeenCalledWith("form_render_measured", expect.any(Number), expect.objectContaining({ formId: "repeating-render" }));
+  });
 });

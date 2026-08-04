@@ -12,6 +12,7 @@ export type FormRendererProps<TValues extends FormValues> = {
   context: FormPlatformContext;
   registry?: FormEngineOptions<TValues>["registry"];
   draftAdapter?: DraftAdapter;
+  telemetry?: FormEngineOptions<TValues>["telemetry"];
   plugins?: FormPlugin[];
   dataSources?: Record<string, OptionDataSource<SelectOption>>;
   stateOverrides?: FormEngineOptions<TValues>["stateOverrides"];
@@ -55,7 +56,7 @@ export function useFieldSnapshot<TValues extends FormValues>(fieldId: keyof TVal
 export function FormRenderer<TValues extends FormValues>(props: FormRendererProps<TValues>): JSX.Element {
   const contextSignature = contextIdentity(props.context);
   const initialValuesSignature = JSON.stringify(props.initialValues);
-  const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition, props.registry, props.draftAdapter, props.plugins, props.dataSources, props.stateOverrides, contextSignature, initialValuesSignature]);
+  const engine = useMemo(() => new FormEngine(compactEngineOptions(props)), [props.definition, props.registry, props.draftAdapter, props.telemetry, props.plugins, props.dataSources, props.stateOverrides, contextSignature, initialValuesSignature]);
   useEffect(() => () => engine.destroy(), [engine]);
   return (
     <FormContext.Provider value={engine as FormEngine<FormValues>}>
@@ -71,6 +72,7 @@ function compactEngineOptions<TValues extends FormValues>(props: FormRendererPro
     context: props.context,
     ...(props.registry ? { registry: props.registry } : {}),
     ...(props.draftAdapter ? { draftAdapter: props.draftAdapter } : {}),
+    ...(props.telemetry ? { telemetry: props.telemetry } : {}),
     ...(props.plugins ? { plugins: props.plugins } : {}),
     ...(props.dataSources ? { dataSources: props.dataSources } : {}),
     ...(props.stateOverrides ? { stateOverrides: props.stateOverrides } : {})
@@ -90,6 +92,7 @@ function contextIdentity(context: FormPlatformContext): string {
 }
 
 function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: { definition: FormDefinition<TValues>; showDebug: boolean }): JSX.Element {
+  const renderStartedAt = performance.now();
   const engine = useFormEngine<TValues>();
   const state = useFormSnapshot<TValues>();
   const locale = engine["options"].context.locale;
@@ -106,6 +109,9 @@ function EnterpriseForm<TValues extends FormValues>({ definition, showDebug }: {
   useEffect(() => {
     void engine.restoreDraft();
   }, [engine]);
+  useEffect(() => {
+    engine.telemetry.measure("form_render_measured", performance.now() - renderStartedAt, { formId: definition.id, formVersion: definition.version, tenantId: engine.options.context.tenantId });
+  });
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     const result = await engine.submit();
@@ -197,7 +203,7 @@ function FieldRenderer<TValues extends FormValues>({ field }: { field: FieldDefi
       ) : field.type === "checkbox" ? (
         <Checkbox {...common} checked={Boolean(value)} onChange={(event) => engine.setValue(field.id, event.currentTarget.checked as TValues[typeof field.id])} />
       ) : field.type === "radio" ? (
-        <RadioGroup id={field.id} name={field.id} disabled={disabled} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(next) => engine.setValue(field.id, next as TValues[typeof field.id])} />
+        <RadioGroup id={field.id} name={field.id} label={label(field.label, locale)} disabled={disabled} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(next) => engine.setValue(field.id, next as TValues[typeof field.id])} />
       ) : field.type === "select" ? (
         field.dataSource ? <RemoteSelectField field={field} common={common} value={String(value ?? "")} remoteOptions={remoteOptions} /> : <Select {...common} placeholder={remoteOptions.placeholder ?? copy.selectPlaceholder} value={String(value ?? "")} options={optionView(remoteOptions.options, locale)} onChange={(event) => engine.setValue(field.id, event.currentTarget.value as TValues[typeof field.id])} />
       ) : field.type === "multi-select" ? (
@@ -280,47 +286,77 @@ function RepeatingField<TValues extends FormValues>({ field }: { field: FieldDef
   const items = Array.isArray(state.values[field.id]) ? (state.values[field.id] as Array<Record<string, unknown>>) : [];
   const childFields = repeatingChildFields(field);
   const labels: Record<string, string> = copy.repeatingFieldLabels;
-  const updateItem = (itemId: string, child: FieldDefinition<FormValues>, rawValue: string | boolean): void => {
+  const updateItem = (itemId: string, child: FieldDefinition<FormValues>, rawValue: unknown): void => {
     const nextValue = (child.type === "number" || child.type === "currency") && rawValue !== "" ? Number(rawValue) : rawValue;
     const next = items.map((item) => item.id === itemId ? { ...item, [child.id]: nextValue } : item);
     engine.setValue(field.id, next as TValues[typeof field.id]);
   };
   return (
-    <div className="af-repeat">
-      {items.map((item) => (
-        <div className="af-repeat-item" key={String(item.id)}>
+    <div className="af-repeat" role="group" aria-labelledby={`${field.id}-repeat-label`}>
+      <span id={`${field.id}-repeat-label`} className="af-sr-only">{label(field.label, locale)}</span>
+      {items.map((item, index) => (
+        <fieldset className="af-repeat-item" key={String(item.id)} aria-labelledby={`${field.id}-${item.id}-legend`}>
+          <legend id={`${field.id}-${item.id}-legend`} className="af-sr-only">{copy.item} {index + 1}</legend>
           <div className="af-repeat-fields">
-            {childFields.map((child) => (
-              <label className="af-repeat-field" key={child.id}>
-                <span>{label(child.label, locale) || labels[child.id] || child.id}</span>
-                {child.type === "checkbox" ? (
-                  <input
-                    className="af-checkbox"
-                    type="checkbox"
-                    checked={Boolean(item[child.id])}
-                    onChange={(event) => updateItem(String(item.id), child, event.currentTarget.checked)}
-                  />
-                ) : (
-                  <input
-                    className="af-input af-repeat-input"
-                    type={child.type === "number" || child.type === "currency" ? "number" : "text"}
-                    value={String(item[child.id] ?? "")}
-                    onChange={(event) => updateItem(String(item.id), child, event.currentTarget.value)}
-                  />
-                )}
-              </label>
-            ))}
+            {childFields.map((child) => {
+              const path = repeatingPath(field.id, index, child.id);
+              const errors = state.errors.filter((error) => error.fieldId === path && error.severity === "error").map((error) => error.message);
+              return (
+                <label className="af-repeat-field" key={child.id} htmlFor={path}>
+                  <span>{label(child.label, locale) || labels[child.id] || child.id}</span>
+                  {renderRepeatingControl({ child, engine, item, itemId: String(item.id), path, errors, locale, updateItem })}
+                  {errors.length ? <em id={`${path}-error`} className="af-message af-message-error" role="alert">{errors[0]}</em> : null}
+                </label>
+              );
+            })}
           </div>
           <div className="af-repeat-actions">
             <Button type="button" className="af-repeat-action" aria-label={copy.up} onClick={() => engine.moveRepeatingItem(field.id, String(item.id), -1)}><ArrowUp size={15} />{copy.up}</Button>
             <Button type="button" className="af-repeat-action" aria-label={copy.down} onClick={() => engine.moveRepeatingItem(field.id, String(item.id), 1)}><ArrowDown size={15} />{copy.down}</Button>
             <Button type="button" className="af-repeat-action" tone="danger" aria-label={copy.remove} onClick={() => engine.removeRepeatingItem(field.id, String(item.id))}><Trash2 size={15} />{copy.remove}</Button>
           </div>
-        </div>
+        </fieldset>
       ))}
       <Button className="af-repeat-add" type="button" onClick={() => engine.addRepeatingItem(field.id, defaultRepeatingItem(childFields))}><Plus size={16} />{copy.addItem}</Button>
     </div>
   );
+}
+
+function renderRepeatingControl<TValues extends FormValues>({ child, engine, item, itemId, path, errors, locale, updateItem }: {
+  child: FieldDefinition<FormValues>;
+  engine: FormEngine<TValues>;
+  item: Record<string, unknown>;
+  itemId: string;
+  path: string;
+  errors: string[];
+  locale: FormPlatformContext["locale"];
+  updateItem: (itemId: string, child: FieldDefinition<FormValues>, rawValue: unknown) => void;
+}): React.ReactNode {
+  const value = item[child.id];
+  const describedBy = errors.length ? `${path}-error` : undefined;
+  const common = { id: path, disabled: false, "aria-invalid": errors.length > 0, ...(describedBy ? { "aria-describedby": describedBy } : {}) };
+  const customRenderer = engine.registry.get(child.type)?.render as CustomFieldRenderer<FormValues> | undefined;
+  if (customRenderer) {
+    return customRenderer({
+      field: child,
+      engine: engine as unknown as FormEngine<FormValues>,
+      state: engine.state as FormEngine<FormValues>["state"],
+      value,
+      locale,
+      disabled: false,
+      required: Boolean(child.required),
+      errors,
+      warnings: [],
+      ...(describedBy ? { describedBy } : {}),
+      setValue: (next) => updateItem(itemId, child, next)
+    });
+  }
+  if (child.type === "textarea") return <TextArea {...common} value={String(value ?? "")} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
+  if (child.type === "checkbox") return <Checkbox {...common} checked={Boolean(value)} onChange={(event) => updateItem(itemId, child, event.currentTarget.checked)} />;
+  if (child.type === "select") return <Select {...common} value={String(value ?? "")} options={optionView(child.options ?? [], locale)} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
+  if (child.type === "multi-select") return <Select {...common} multiple value={Array.isArray(value) ? value.map(String) : []} options={optionView(child.options ?? [], locale)} onChange={(event) => updateItem(itemId, child, Array.from(event.currentTarget.selectedOptions).map((option) => option.value))} />;
+  if (child.type === "radio") return <RadioGroup id={path} name={label(child.label, locale)} inputName={path} value={String(value ?? "")} invalid={errors.length > 0} {...(describedBy ? { ariaDescribedBy: describedBy } : {})} options={optionView(child.options ?? [], locale)} onChange={(next) => updateItem(itemId, child, next)} />;
+  return <TextInput {...common} type={child.type === "number" || child.type === "currency" ? "number" : child.type === "date" ? "date" : "text"} value={String(value ?? "")} onChange={(event) => updateItem(itemId, child, event.currentTarget.value)} />;
 }
 
 function describedByFor<TValues extends FormValues>(field: FieldDefinition<TValues>, pending: boolean, hasError: boolean): string | undefined {
@@ -407,6 +443,10 @@ function formatFieldValue(type: "number" | "currency" | "date", value: unknown, 
 function repeatingChildFields<TValues extends FormValues>(field: FieldDefinition<TValues>): FieldDefinition<FormValues>[] {
   if (field.type === "repeating-group" && "fields" in field) return field.fields as FieldDefinition<FormValues>[];
   return [];
+}
+
+function repeatingPath(fieldId: string, itemIndex: number, childId: string): string {
+  return `${fieldId}[${itemIndex}].${childId}`;
 }
 
 function defaultRepeatingItem(fields: FieldDefinition<FormValues>[]): Record<string, unknown> {

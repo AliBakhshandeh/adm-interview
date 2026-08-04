@@ -55,13 +55,15 @@ export function Checkbox(props: React.InputHTMLAttributes<HTMLInputElement>): JS
   return <input {...props} type="checkbox" className={clsx("af-checkbox", props.className)} />;
 }
 
-export function RadioGroup(props: { id: string; name: string; value: string; disabled?: boolean; invalid?: boolean; ariaDescribedBy?: string; options: Array<{ value: string; label: string; disabled?: boolean }>; onChange: (value: string) => void }): JSX.Element {
+export function RadioGroup(props: { id: string; name: string; inputName?: string; label?: string; value: string; disabled?: boolean; invalid?: boolean; ariaDescribedBy?: string; options: Array<{ value: string; label: string; disabled?: boolean }>; onChange: (value: string) => void }): JSX.Element {
+  const inputName = props.inputName ?? props.name;
+  const accessibleName = props.label ?? props.name;
   return (
     <div className="af-radio-group" role="radiogroup" aria-labelledby={`${props.id}-legend`} aria-describedby={props.ariaDescribedBy} aria-invalid={props.invalid || undefined}>
-      <span id={`${props.id}-legend`} className="af-sr-only">{props.name}</span>
+      <span id={`${props.id}-legend`} className="af-sr-only">{accessibleName}</span>
       {props.options.map((option) => (
         <label className="af-radio-option" key={option.value}>
-          <input type="radio" name={props.name} value={option.value} checked={props.value === option.value} disabled={props.disabled || option.disabled} onChange={(event) => props.onChange(event.currentTarget.value)} />
+          <input type="radio" name={inputName} value={option.value} checked={props.value === option.value} disabled={props.disabled || option.disabled} onChange={(event) => props.onChange(event.currentTarget.value)} />
           <span>{option.label}</span>
         </label>
       ))}
@@ -88,11 +90,12 @@ export function Stepper(props: { steps: string[]; current: number; errors?: numb
 }
 
 export function ErrorSummary({ errors, onFocusField, title = "Review required" }: { errors: Array<{ fieldId?: string; message: string }>; onFocusField?: (fieldId: string) => void; title?: string }): JSX.Element | null {
-  if (!errors.length) return null;
+  const uniqueErrors = [...new Map(errors.map((error) => [`${error.fieldId ?? "form"}:${error.message}`, error])).values()];
+  if (!uniqueErrors.length) return null;
   return (
     <section className="af-error-summary" role="alert" aria-labelledby="error-summary-title">
       <h3 id="error-summary-title">{title}</h3>
-      {errors.map((error, index) => (
+      {uniqueErrors.map((error, index) => (
         <button key={`${error.fieldId}-${index}`} type="button" onClick={() => error.fieldId && onFocusField?.(error.fieldId)}>
           <AlertCircle size={16} /> {error.message}
         </button>

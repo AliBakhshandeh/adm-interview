@@ -77,4 +77,25 @@ describe("form-validation", () => {
     } as unknown as FormDefinition<{ items: unknown[] }>;
     expect(validateFormDefinition(definition).map((issue) => issue.code)).toEqual(expect.arrayContaining(["invalid-permission-value", "invalid-repeating-range"]));
   });
+
+  it("validates repeating cardinality and nested child paths", async () => {
+    const definition: FormDefinition<{ contacts: Array<{ id: string; name: string; relation: string }> }> = {
+      id: "repeating-values",
+      version: 1,
+      title: "Repeating values",
+      sections: [{ id: "main", title: "Main", fields: [{
+        id: "contacts",
+        type: "repeating-group",
+        label: "Contacts",
+        minItems: 2,
+        maxItems: 2,
+        fields: [
+          { id: "name", type: "text", label: "Name", required: true },
+          { id: "relation", type: "select", label: "Relation", required: true, options: [{ value: "manager", label: "Manager" }] }
+        ]
+      }] }]
+    };
+    const errors = await validateValues({ definition, values: { contacts: [{ id: "one", name: "", relation: "" }] }, context, visible: new Set(["contacts"]), required: new Set() });
+    expect(errors.map((error) => error.fieldId)).toEqual(expect.arrayContaining(["contacts", "contacts[0].name", "contacts[0].relation"]));
+  });
 });
